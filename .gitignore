@@ -1,0 +1,28 @@
+# ignore everything
+
+*
+
+# unignore stuff
+
+!cuda
+!cuda/**/
+!cuda/**
+
+!include
+!include/**/
+!include/**
+
+!src
+!src/**/
+!src/**
+
+!.gitignore
+
+!tokenizer
+!tokenizer/**
+
+# unignore project stuff
+
+!CMakeLists.txt
+!README.md
+!LICENSE
