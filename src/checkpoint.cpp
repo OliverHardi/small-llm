@@ -48,8 +48,6 @@ void save_checkpoint(const std::string& path, Model& model, const AdamW& optimiz
         }
         // save optimizer moment and step count
         optimizer.save(out);
-
-        if (!out) throw std::runtime_error("save_checkpoint: write failed (disk full?)");
     }
 
     std::filesystem::rename(tmp_path, path);   // atomic replace

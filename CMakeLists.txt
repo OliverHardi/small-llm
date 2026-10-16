@@ -7,10 +7,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Find all .cpp files under src/, including subdirectories
+# Find all .cpp files under src/
 file(GLOB_RECURSE SOURCES
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+
+# Find all .cpp files under cuda/
+file(GLOB_RECURSE SOURCES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cuda/*.cpp"
 )
 
 # Executable
