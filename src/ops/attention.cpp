@@ -5,6 +5,10 @@
 #include "ops/elementwise.h"
 #include "ops/matmul.h"
 #include "ops/softmax.h"
+
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
  
 namespace {
 

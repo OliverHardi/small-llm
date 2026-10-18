@@ -3,6 +3,10 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
 
     size_t vocab_size = logits.dim(logits.ndim() - 1);

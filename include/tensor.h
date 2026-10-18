@@ -18,6 +18,7 @@ public:
     explicit Tensor(const std::vector<size_t>& shape);
     Tensor(std::initializer_list<size_t> shape);
     Tensor(const std::vector<size_t>& shape, float value);
+    Tensor(const std::vector<size_t>& shape, Device device);
 
     // shape
     const std::vector<size_t>& shape() const { return shape_; }
@@ -29,11 +30,12 @@ public:
 
     // device
     Device device() const { return device_; }
+    bool is_cuda() const { return device_ == Device::CUDA; }
     Tensor to(Device target) const;   // returns a shallow copy if already on `target`
 
     // data access (valid for the tensor's own device)
-    float* data() { return storage_ ? storage_->host.data() : nullptr; }
-    const float* data() const { return storage_ ? storage_->host.data() : nullptr; }
+    float* data() { return pointer(); }
+    const float* data() const { return pointer(); }
 
     // element access: host (CPU) tensors only
     float& operator[](size_t index) {
@@ -62,7 +64,7 @@ public:
     void fill(float value);
     void zero();
 
-    // random
+    // random - CPU only
     static void seed(uint32_t s);
     static std::mt19937& rng();
     void randomNormal(float mean, float stddev);
@@ -88,7 +90,12 @@ public:
 private:
     struct Storage {
         std::vector<float> host;
-        // TODO: a device pointer, freed in the destructor
+        float* device = nullptr;
+ 
+        Storage() = default;
+        Storage(const Storage&) = delete;
+        Storage& operator=(const Storage&) = delete;
+        ~Storage();
     };
 
     std::shared_ptr<Storage> storage_;
@@ -98,6 +105,14 @@ private:
     Device device_ = Device::CPU;
 
     void calculateStrides();
+    void allocate();
+    void require_cpu(const char* what) const;
+ 
+    float* pointer() const {
+        if (!storage_) return nullptr;
+        return device_ == Device::CUDA ? storage_->device
+                                       : const_cast<float*>(storage_->host.data());
+    }
 
     // flat index from n indices
     template <typename... Indices>
@@ -112,3 +127,9 @@ private:
         return result;
     }
 };
+
+inline void require_same_device(const Tensor& a, const Tensor& b, const char* op) {
+    if (a.device() != b.device()) {
+        throw std::invalid_argument(std::string(op) + ": tensors are on different devices");
+    }
+}

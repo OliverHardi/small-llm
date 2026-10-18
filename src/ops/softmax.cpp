@@ -1,5 +1,9 @@
 #include "ops/softmax.h"
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 Tensor ops::softmax(const Tensor& x, int axis, bool causal) {
     if (axis != -1 && axis != static_cast<int>(x.ndim()) - 1) {
         throw std::invalid_argument("softmax: only the last axis is supported");

@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <vector>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 Tensor ops::embedding(const std::vector<uint32_t>& token_ids, const Tensor& weights) {
     size_t embedding_dim = weights.dim(1);
 

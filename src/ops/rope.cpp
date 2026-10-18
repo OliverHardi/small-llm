@@ -3,6 +3,10 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 namespace {
 
 // rotate each consecutive pair (x[2i], x[2i+1]) by angle pos * theta^(-2i/head_dim).

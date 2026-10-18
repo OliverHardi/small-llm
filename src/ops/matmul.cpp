@@ -4,6 +4,10 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 Tensor ops::matmul(const Tensor& a, const Tensor& b) {
     if (a.ndim() != 2 || b.ndim() != 2) {
         throw std::runtime_error(
@@ -15,6 +19,15 @@ Tensor ops::matmul(const Tensor& a, const Tensor& b) {
     const size_t K = a.dim(1);
 
     const size_t N = b.dim(1);
+
+    #ifdef USE_CUDA
+    if (a.is_cuda()) {
+        require_same_device(a, b, "matmul");
+        Tensor out({M, N}, Device::CUDA);
+        cuda::matmul(a.data(), b.data(), out.data(), M, K, N);
+        return out;
+    }
+    #endif
     
     Tensor result({M, N});
 

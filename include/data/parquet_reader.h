@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 
 #include <arrow/api.h>
 #include <arrow/io/api.h>

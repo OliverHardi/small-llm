@@ -6,6 +6,10 @@
 #include <iostream>
 #include <stdexcept>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 // helper
 static size_t product(const std::vector<size_t>& shape) {
     size_t n = 1;
@@ -13,7 +17,28 @@ static size_t product(const std::vector<size_t>& shape) {
     return n;
 }
 
-// constructors (CPU tensors are zero-initialized)
+// storage
+
+Tensor::Storage::~Storage() {
+#ifdef USE_CUDA
+    // Never throw from a destructor.
+    try { cuda::device_free(device); } catch (...) {}
+#endif
+}
+
+void Tensor::allocate() {
+    if (device_ == Device::CPU) {
+        storage_->host.assign(numel_, 0.0f);
+        return;
+    }
+#ifdef USE_CUDA
+    storage_->device = static_cast<float*>(cuda::device_alloc(numel_ * sizeof(float)));
+#else
+    throw std::runtime_error("Tensor: built without CUDA support (define USE_CUDA)");
+#endif
+}
+
+// constructors
 
 Tensor::Tensor(const std::vector<size_t>& shape)
     : storage_(std::make_shared<Storage>()), shape_(shape), numel_(product(shape)) {
@@ -33,6 +58,12 @@ Tensor::Tensor(const std::vector<size_t>& shape, float value)
     storage_->host.assign(numel_, value);
 }
 
+Tensor::Tensor(const std::vector<size_t>& shape, Device device)
+    : storage_(std::make_shared<Storage>()), shape_(shape), numel_(product(shape)), device_(device) {
+    calculateStrides();
+    allocate();
+}
+
 // shape
 
 size_t Tensor::dim(size_t axis) const {
@@ -49,7 +80,20 @@ Tensor Tensor::to(Device target) const {
     if (target == device_) {
         return *this;
     }
-    throw std::runtime_error("Tensor::to: CUDA transfers are not implemented yet");
+
+#ifdef USE_CUDA
+    Tensor result(shape_, target);
+    const size_t bytes = numel_ * sizeof(float);
+ 
+    if (target == Device::CUDA) {
+        cuda::copy_h2d(result.data(), data(), bytes);
+    } else {
+        cuda::copy_d2h(result.data(), data(), bytes);   // synchronizes
+    }
+    return result;
+#else
+    throw std::runtime_error("Tensor::to: built without CUDA support (define USE_CUDA)");
+#endif
 }
 
 // fill

@@ -3,6 +3,10 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
+
 Tensor ops::rmsnorm(const Tensor& x, const Tensor& weight, float eps) {
 
     size_t hidden_size = x.dim(x.ndim() - 1);
