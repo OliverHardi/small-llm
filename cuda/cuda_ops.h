@@ -50,9 +50,10 @@ void embedding(const float* table, const float* ids, float* out,
 void embedding_backward(const float* ids, const float* grad_out, float* grad_table,
                         size_t num_tokens, size_t d_model);              // grad_table += (atomic)
 
-void split_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd);  // [B,T,H*hd] -> [B,H,T,hd]
-void merge_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd);  // [B,H,T,hd] -> [B,T,H*hd]
-void transpose(const float* x, float* out, size_t rows, size_t cols);                   // [R,C] -> [C,R]
+void split_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd);        // [B,T,H*hd] -> [B,H,T,hd]
+void merge_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd);        // [B,H,T,hd] -> [B,T,H*hd]
+void transpose(const float* x, float* out, size_t rows, size_t cols);                         // [R,C] -> [C,R]
+void transpose_batched(const float* x, float* out, size_t batch, size_t rows, size_t cols);   // [batch,R,C] -> [batch,C,R]
 
 // x is [groups, T, head_dim], consecutive pairs (2i, 2i+1) rotated, like ops::rope.
 // sign = +1 forward, -1 backward.

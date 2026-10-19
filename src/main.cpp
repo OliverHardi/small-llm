@@ -13,7 +13,29 @@
 #include "inference.h"
 #include "checkpoint.h"
 
+#include "ops/elementwise.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+#ifdef USE_CUDA
+int run_cuda_parity_tests();
+int run_model_parity_test();
+#endif
+
 int main() {
+
+    #ifdef USE_CUDA
+    try {
+        return run_cuda_parity_tests() + run_model_parity_test();
+    } catch (const std::exception& e) {
+        std::printf("CUDA test failed: %s\n", e.what());
+        return 1;
+    }
+    #endif
+
+    return 0;
 
     ModelConfig modelConfig;
 
@@ -61,19 +83,15 @@ int main() {
 
     Scheduler scheduler(
         trainingConfig.learning_rate,   // max lr
-        0.05,                           // 5% linear warmup
+        0.05f,                           // 5% linear warmup
         total_steps                     // total steps (training tokens / (context length * batch size))
     );
 
-    std::cout << "total params: " << modelConfig.totalParams() << std::endl;
+    // save_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer, TrainState{0, dataloader.position()});
 
-    save_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer, TrainState{0, dataloader.position()});
-
-    TrainState state = load_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer);
-    dataloader.setPosition(state.data_position);
-    start_step = state.step;
-
-    std::cout << "total params again: " << modelConfig.totalParams() << std::endl;
+    // TrainState state = load_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer);
+    // dataloader.setPosition(state.data_position);
+    // start_step = state.step;
     
     for (size_t step = start_step; step < total_steps; ++step) {
         const float lr = scheduler.lr(step);

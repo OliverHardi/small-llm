@@ -14,6 +14,15 @@ Tensor apply_rope(const Tensor& x, float theta, float sign) {
     if (x.ndim() < 2) {
         throw std::invalid_argument("rope: expects at least 2 dimensions [..., T, head_dim]");
     }
+
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            const size_t T = x.dim(x.ndim() - 2), hd = x.dim(x.ndim() - 1);
+            Tensor out(x.shape(), Device::CUDA);
+            cuda::rope(x.data(), out.data(), x.numel() / (T * hd), T, hd, theta, sign);
+            return out;
+        }
+    #endif
  
     const size_t head_dim = x.dim(x.ndim() - 1);
     const size_t num_positions = x.dim(x.ndim() - 2);

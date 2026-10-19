@@ -12,6 +12,14 @@ float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
     size_t vocab_size = logits.dim(logits.ndim() - 1);
     size_t num_predictions = logits.numel() / vocab_size;
 
+    #ifdef USE_CUDA
+        if (logits.is_cuda()) {
+            require_same_device(logits, targets, "cross_entropy");
+            const size_t V = logits.dim(logits.ndim() - 1);
+            return cuda::cross_entropy(logits.data(), targets.data(), logits.numel() / V, V);
+        }
+    #endif
+
     double total_loss = 0.0f;
 
     for (size_t i = 0; i < num_predictions; ++i) {
@@ -43,6 +51,17 @@ Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets) 
     const size_t vocab_size = logits.dim(logits.ndim() - 1);
     const size_t num_predictions = logits.numel() / vocab_size;
     const float inv_n = 1.0f / static_cast<float>(num_predictions);
+
+    #ifdef USE_CUDA
+        if (logits.is_cuda()) {
+            require_same_device(logits, targets, "cross_entropy_backward");
+            const size_t V = logits.dim(logits.ndim() - 1);
+            Tensor grad(logits.shape(), Device::CUDA);
+            cuda::cross_entropy_backward(logits.data(), targets.data(), grad.data(),
+                                        logits.numel() / V, V);
+            return grad;
+        }
+    #endif
 
     Tensor grad(logits.shape());
 

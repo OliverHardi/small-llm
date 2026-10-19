@@ -5,6 +5,7 @@
 #include <cmath>
 #include <istream>
 #include <ostream>
+#include <utility>
 
 float clip_grad_norm(const std::vector<Param>& params, float max_norm) {
     double sum_sq = 0.0;
@@ -44,15 +45,20 @@ void AdamW::step(float lr) {
 void AdamW::save(std::ostream& out) const {
     out.write(reinterpret_cast<const char*>(&step_count_), sizeof(step_count_));
     for (size_t k = 0; k < params_.size(); ++k) {
-        out.write(reinterpret_cast<const char*>(m_[k].data()), m_[k].numel() * sizeof(float));
-        out.write(reinterpret_cast<const char*>(v_[k].data()), v_[k].numel() * sizeof(float));
+        const Tensor m_host = m_[k].to(Device::CPU);
+        const Tensor v_host = v_[k].to(Device::CPU);
+        out.write(reinterpret_cast<const char*>(m_host.data()), m_host.numel() * sizeof(float));
+        out.write(reinterpret_cast<const char*>(v_host.data()), v_host.numel() * sizeof(float));
     }
 }
 
 void AdamW::load(std::istream& in) {
     in.read(reinterpret_cast<char*>(&step_count_), sizeof(step_count_));
     for (size_t k = 0; k < params_.size(); ++k) {
-        in.read(reinterpret_cast<char*>(m_[k].data()), m_[k].numel() * sizeof(float));
-        in.read(reinterpret_cast<char*>(v_[k].data()), v_[k].numel() * sizeof(float));
+        Tensor m_host(m_[k].shape()), v_host(v_[k].shape());
+        in.read(reinterpret_cast<char*>(m_host.data()), m_host.numel() * sizeof(float));
+        in.read(reinterpret_cast<char*>(v_host.data()), v_host.numel() * sizeof(float));
+        m_[k] = m_host.to(params_[k].value->device());
+        v_[k] = v_host.to(params_[k].value->device());
     }
 }

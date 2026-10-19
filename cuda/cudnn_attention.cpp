@@ -38,9 +38,9 @@ void check_cuda(cudaError_t status, const char* what) {
     }
 }
 
-void check_fe(const fe::error_t& error, const char* what) {
-    if (error.is_bad()) {
-        throw std::runtime_error(std::string(what) + ": " + error.get_message());
+void check_fe(cudnn_frontend::error_t status, const char* what) {
+    if (status.is_bad()) {
+        throw std::runtime_error(std::string(what) + ": " + status.get_message());
     }
 }
 

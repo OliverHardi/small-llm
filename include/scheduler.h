@@ -14,7 +14,7 @@ public:
     }
 
     float lr(size_t step) {
-        size_t warmupSteps = num_steps_ * warmup_;
+        size_t warmupSteps = static_cast<size_t>(num_steps_ * warmup_);
 
         if (step < warmupSteps) {
             return peak_ * static_cast<float>(step + 1) / static_cast<float>(warmupSteps);

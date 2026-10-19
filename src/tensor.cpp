@@ -103,7 +103,13 @@ void Tensor::fill(float value) {
 }
 
 void Tensor::zero() {
-    fill(0.0f);
+    if (device_ == Device::CUDA) {
+        #ifdef USE_CUDA
+        cuda::device_zero(data(), numel());
+        #endif
+    } else {
+        std::fill(data(), data() + numel(), 0.0f);
+    }
 }
 
 // random init
@@ -176,13 +182,15 @@ Tensor Tensor::reshaped(std::initializer_list<size_t> new_shape) const {
 // deep copy
 
 Tensor Tensor::clone() const {
-    if (!storage_) {
-        return Tensor();
+    Tensor out(shape_, device_);
+    if (device_ == Device::CUDA) {
+        #ifdef USE_CUDA
+        cuda::copy_d2d(out.data(), data(), numel() * sizeof(float));
+        #endif
+    } else {
+        std::copy(data(), data() + numel(), out.data());
     }
-
-    Tensor result(shape_);
-    std::copy(data(), data() + numel_, result.data());
-    return result;
+    return out;
 }
 
 // debug

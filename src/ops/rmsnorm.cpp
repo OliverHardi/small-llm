@@ -9,6 +9,16 @@
 
 Tensor ops::rmsnorm(const Tensor& x, const Tensor& weight, float eps) {
 
+    #ifdef USE_CUDA
+        if (x.is_cuda() || weight.is_cuda()) {
+            require_same_device(x, weight, "rmsnorm");
+            const size_t D = weight.numel();
+            Tensor out(x.shape(), Device::CUDA);
+            cuda::rmsnorm(x.data(), weight.data(), out.data(), x.numel() / D, D, eps);
+            return out;
+        }
+    #endif
+
     size_t hidden_size = x.dim(x.ndim() - 1);
 
     if (weight.ndim() != 1 || weight.dim(0) != hidden_size) {
@@ -54,6 +64,17 @@ Tensor ops::rmsnorm(const Tensor& x, const Tensor& weight, float eps) {
 //   dL/dx_i  = r * gw_i - (r^3 / D) * x_i * sum_j(gw_j * x_j)
 Tensor ops::rmsnorm_backward(const Tensor& x, const Tensor& weight,
                              const Tensor& grad_output, Tensor& weight_grad, float eps) {
+
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            const size_t D = weight.numel();
+            Tensor dx(x.shape(), Device::CUDA);
+            cuda::rmsnorm_backward(x.data(), weight.data(), grad_output.data(), dx.data(),
+                                weight_grad.data(), x.numel() / D, D, eps);
+            return dx;
+        }
+    #endif
+
     const size_t hidden_size = x.dim(x.ndim() - 1);
 
     if (weight.ndim() != 1 || weight.dim(0) != hidden_size ||

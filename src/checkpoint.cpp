@@ -38,7 +38,8 @@ void save_checkpoint(const std::string& path, Model& model, const AdamW& optimiz
 
         for (const Param& p : params) {
             write_pod(out, static_cast<uint32_t>(p.name.size()));
-            out.write(p.name.data(), p.name.size());
+            const Tensor host = p.value->to(Device::CPU);
+            out.write(reinterpret_cast<const char*>(host.data()), host.numel() * sizeof(float));
  
             const std::vector<size_t>& shape = p.value->shape();
             write_pod(out, static_cast<uint32_t>(shape.size()));
@@ -80,7 +81,9 @@ TrainState load_checkpoint(const std::string& path, Model& model, AdamW& optimiz
             throw std::runtime_error("load_checkpoint: shape mismatch for '" + p.name + "'");
         }
 
-        in.read(reinterpret_cast<char*>(p.value->data()), p.value->numel() * sizeof(float));
+        Tensor host(p.value->shape());
+        in.read(reinterpret_cast<char*>(host.data()), host.numel() * sizeof(float));
+        *p.value = host.to(p.value->device());
     }
 
     optimizer.load(in);

@@ -36,6 +36,8 @@ public:
 
     // the config of the model
     const ModelConfig& config() const { return config_; }
+
+    void to(Device device);
 private:
     ModelConfig config_;
  

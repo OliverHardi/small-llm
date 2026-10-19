@@ -175,6 +175,9 @@ void ops::adamw_step(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
                      float weight_decay, float bias1, float bias2) {
 
     #ifdef USE_CUDA
+    require_same_device(param, m, "adamw_step");
+    require_same_device(param, v, "adamw_step");
+    require_same_device(param, grad, "adamw_step");
     if (param.is_cuda()) {
         cuda::adamw_step(param.data(), grad.data(), m.data(), v.data(), param.numel(),
                         lr, beta1, beta2, eps, weight_decay, bias1, bias2);

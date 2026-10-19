@@ -15,6 +15,14 @@ namespace {
 // [B, H, A, C] -> [B, H, C, A]
 Tensor transpose_last_two(const Tensor& x) {
     const size_t B = x.dim(0), H = x.dim(1), A = x.dim(2), C = x.dim(3);
+
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            Tensor out({B, H, C, A}, Device::CUDA);
+            cuda::transpose_batched(x.data(), out.data(), B * H, A, C);
+            return out;
+        }
+    #endif
  
     Tensor out({B, H, C, A});
     for (size_t b = 0; b < B; ++b)
@@ -39,6 +47,14 @@ Tensor attention_probs(const Tensor& q, const Tensor& k, bool causal) {
 Tensor ops::split_heads(const Tensor& x, size_t num_heads) {
     const size_t B = x.dim(0), T = x.dim(1), D = x.dim(2);
     const size_t hd = D / num_heads;
+
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            Tensor out({B, num_heads, T, hd}, Device::CUDA);
+            cuda::split_heads(x.data(), out.data(), B, T, num_heads, hd);
+            return out;
+        }
+    #endif
  
     Tensor out({B, num_heads, T, hd});
     for (size_t b = 0; b < B; ++b)
@@ -52,6 +68,14 @@ Tensor ops::split_heads(const Tensor& x, size_t num_heads) {
 // [B, H, T, hd] -> [B, T, D]
 Tensor ops::merge_heads(const Tensor& x) {
     const size_t B = x.dim(0), H = x.dim(1), T = x.dim(2), hd = x.dim(3);
+
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            Tensor out({B, T, H * hd}, Device::CUDA);
+            cuda::merge_heads(x.data(), out.data(), B, T, H, hd);
+            return out;
+        }
+    #endif
  
     Tensor out({B, T, H * hd});
     for (size_t b = 0; b < B; ++b)
@@ -78,6 +102,8 @@ ops::AttentionOutput ops::attention(const Tensor& q, const Tensor& k, const Tens
 ops::AttentionGrads ops::attention_backward(const Tensor& q, const Tensor& k, const Tensor& v,
                                             const Tensor& out, const Tensor& stats,
                                             const Tensor& grad_out, bool causal) {
+
+    
     (void)out;
     (void)stats;
 

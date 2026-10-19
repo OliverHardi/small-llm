@@ -47,7 +47,10 @@ Tensor ops::matmul(const Tensor& a, const Tensor& b) {
 Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
     const size_t ndim = a.ndim();
 
-    // Check batch dimensions.
+    if (ndim < 2 || b.ndim() != ndim) {
+        throw std::invalid_argument("batched_matmul: tensors must have the same rank >= 2");
+    }
+
     for (size_t i = 0; i < ndim - 2; ++i) {
         if (a.dim(i) != b.dim(i)) {
             throw std::invalid_argument(
@@ -78,8 +81,6 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
     result_shape.push_back(M);
     result_shape.push_back(N);
 
-    Tensor result(result_shape);
-
     // Number of independent matrix multiplications.
     size_t num_batches = 1;
 
@@ -87,6 +88,16 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
         num_batches *= a.dim(i);
     }
 
+    #ifdef USE_CUDA
+    if (a.is_cuda() || b.is_cuda()) {
+        require_same_device(a, b, "batched_matmul");
+        Tensor out(result_shape, Device::CUDA);
+        cuda::batched_matmul(a.data(), b.data(), out.data(), num_batches, M, K, N);
+        return out;
+    }
+    #endif
+
+    Tensor result(result_shape);
 
     for (size_t batch = 0; batch < num_batches; ++batch) {
 
@@ -120,6 +131,15 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
 Tensor ops::matmul_bt(const Tensor& a, const Tensor& b) {
     const size_t M = a.dim(0), K = a.dim(1), N = b.dim(0);
 
+    #ifdef USE_CUDA
+        if (a.is_cuda() || b.is_cuda()) {
+            require_same_device(a, b, "matmul_bt");
+            Tensor out({M, N}, Device::CUDA);
+            cuda::matmul_bt(a.data(), b.data(), out.data(), M, K, N);
+            return out;
+        }
+    #endif
+
     Tensor c({M, N});
     for (size_t i = 0; i < M; ++i) {
         for (size_t j = 0; j < N; ++j) {
@@ -134,6 +154,15 @@ Tensor ops::matmul_bt(const Tensor& a, const Tensor& b) {
 // a[K,M]^T @ b[K,N] -> [M,N]. k outermost so b and c are read/written row-contiguously.
 Tensor ops::matmul_at(const Tensor& a, const Tensor& b) {
     const size_t K = a.dim(0), M = a.dim(1), N = b.dim(1);
+
+    #ifdef USE_CUDA
+        if (a.is_cuda() || b.is_cuda()) {
+            require_same_device(a, b, "matmul_at");
+            Tensor out({M, N}, Device::CUDA);
+            cuda::matmul_at(a.data(), b.data(), out.data(), M, K, N);
+            return out;
+        }
+    #endif
 
     Tensor c({M, N});   // zero-initialized
     for (size_t k = 0; k < K; ++k) {

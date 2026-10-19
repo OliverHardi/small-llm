@@ -469,7 +469,7 @@ void Tokenizer::save(const std::string& path) {
     }
 
     // Number of merges
-    int num_merges = merges_.size();
+    int num_merges = static_cast<int>(merges_.size());
 
     out.write(
         reinterpret_cast<const char*>(&num_merges),

@@ -12,6 +12,14 @@ Tensor ops::softmax(const Tensor& x, int axis, bool causal) {
     const size_t cols = x.dim(x.ndim() - 1);
     const size_t rows = x.numel() / cols;
 
+    #ifdef USE_CUDA
+        if (x.is_cuda()) {
+            Tensor out(x.shape(), Device::CUDA);
+            cuda::softmax(x.data(), out.data(), x.numel() / cols, cols, causal);
+            return out;
+        }
+    #endif
+
     Tensor result(x.shape());   // zero-initialized, so masked entries stay 0
 
     for (size_t r = 0; r < rows; ++r) {
@@ -36,6 +44,16 @@ Tensor ops::softmax(const Tensor& x, int axis, bool causal) {
 Tensor ops::softmax_backward(const Tensor& probs, const Tensor& grad_output) {
     const size_t cols = probs.dim(probs.ndim() - 1);
     const size_t rows = probs.numel() / cols;
+
+    #ifdef USE_CUDA
+        if (probs.is_cuda()) {
+            require_same_device(probs, grad_output, "softmax_backward");
+            Tensor dx(probs.shape(), Device::CUDA);
+            cuda::softmax_backward(probs.data(), grad_output.data(), dx.data(),
+                                probs.numel() / cols, cols);
+            return dx;
+        }
+    #endif
 
     Tensor dx(probs.shape());
 

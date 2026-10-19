@@ -182,6 +182,17 @@ __global__ void transpose_kernel(const float* x, float* out, size_t rows, size_t
     out[i] = x[out_col * cols + out_row];
 }
 
+// [batch, rows, cols] -> [batch, cols, rows]. Used for q @ k^T style products in attention.
+__global__ void transpose_batched_kernel(const float* x, float* out, size_t total,
+                                         size_t rows, size_t cols) {
+    ELEMENT_INDEX(total)
+    const size_t matrix = i / (rows * cols);
+    const size_t within = i % (rows * cols);
+    const size_t out_row = within / rows;     // output matrix is [cols, rows]
+    const size_t out_col = within % rows;
+    out[i] = x[matrix * rows * cols + out_col * cols + out_row];
+}
+
 void split_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd) {
     const size_t total = B * T * H * hd;
     LAUNCH(split_heads_kernel, total, x, out, total, T, H, hd);
@@ -195,6 +206,11 @@ void merge_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_
 void transpose(const float* x, float* out, size_t rows, size_t cols) {
     const size_t total = rows * cols;
     LAUNCH(transpose_kernel, total, x, out, rows, cols);
+}
+
+void transpose_batched(const float* x, float* out, size_t batch, size_t rows, size_t cols) {
+    const size_t total = batch * rows * cols;
+    LAUNCH(transpose_batched_kernel, total, x, out, total, rows, cols);
 }
 
 // One thread per (group, position, pair). Same math as the CPU table version:

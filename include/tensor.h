@@ -39,24 +39,28 @@ public:
 
     // element access: host (CPU) tensors only
     float& operator[](size_t index) {
-        assert(device_ == Device::CPU);
+        // assert(device_ == Device::CPU);
+        if (device_ != Device::CPU) throw std::logic_error("element access on a CUDA tensor");
         return storage_->host[index];
     }
 
     const float& operator[](size_t index) const {
-        assert(device_ == Device::CPU);
+        // assert(device_ == Device::CPU);
+        if (device_ != Device::CPU) throw std::logic_error("element access on a CUDA tensor");
         return storage_->host[index];
     }
 
     template <typename... Indices>
     float& operator()(Indices... indices) {
-        assert(device_ == Device::CPU);
+        // assert(device_ == Device::CPU);
+        if (device_ != Device::CPU) throw std::logic_error("element access on a CUDA tensor");
         return storage_->host[offset_of(static_cast<size_t>(indices)...)];
     }
 
     template <typename... Indices>
     const float& operator()(Indices... indices) const {
-        assert(device_ == Device::CPU);
+        // assert(device_ == Device::CPU);
+        if (device_ != Device::CPU) throw std::logic_error("element access on a CUDA tensor");
         return storage_->host[offset_of(static_cast<size_t>(indices)...)];
     }
 
