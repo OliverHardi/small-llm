@@ -216,6 +216,22 @@ __global__ void sum_squares_partial_kernel(const float* x, size_t n, double* par
     if (threadIdx.x == 0) partials[blockIdx.x] = local;
 }
 
+__global__ void sum_squares_accum_kernel(const float* x, size_t n, double* acc) {
+    double local = 0.0;
+    const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+    for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < n; i += stride) {
+        local += static_cast<double>(x[i]) * x[i];
+    }
+    local = block_sum(local);
+    if (threadIdx.x == 0) atomicAdd(acc, local);
+}
+
+double* accumulator() {                    // one persistent device double, never freed
+    static double* acc = nullptr;
+    if (!acc) CUDA_CHECK(cudaMalloc(&acc, sizeof(double)));
+    return acc;
+}
+
 __global__ void sum_partials_kernel(const double* partials, unsigned count, double* out) {
     double total = 0.0;
     for (unsigned i = threadIdx.x; i < count; i += blockDim.x) total += partials[i];
@@ -296,6 +312,22 @@ float sum_squares(const float* x, size_t n) {
     double host = 0.0;
     copy_d2h(&host, out, sizeof(double));   // synchronizes
     return static_cast<float>(host);
+}
+
+void sum_squares_reset() { CUDA_CHECK(cudaMemsetAsync(accumulator(), 0, sizeof(double))); }
+
+void sum_squares_add(const float* x, size_t n) {          // no sync
+    if (n == 0) return;
+    unsigned blocks = blocks_for(n);
+    if (blocks > kMaxPartials) blocks = kMaxPartials;
+    sum_squares_accum_kernel<<<blocks, kBlockSize>>>(x, n, accumulator());
+    CUDA_LAUNCH_CHECK();
+}
+
+double sum_squares_read() {                               // the one synchronization
+    double host = 0.0;
+    copy_d2h(&host, accumulator(), sizeof(double));
+    return host;
 }
 
 } // namespace cuda

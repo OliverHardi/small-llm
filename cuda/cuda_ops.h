@@ -10,6 +10,12 @@
 
 namespace cuda {
 
+// ---- helpers (cuda_ops.cu) --------------------------------------------------------
+void print_device_build_info();
+
+void startCudaTimer();
+float stopCudaTimer();
+
 // ---- memory (cuda_memory.cu) -------------------------------------------------------
 void* device_alloc(size_t bytes);                       // uninitialized!
 void  device_free(void* ptr);                           // null-safe
@@ -71,7 +77,10 @@ void matmul_at(const float* a, const float* b, float* c, size_t M, size_t K, siz
 // batch independent products: a[batch,M,K] @ b[batch,K,N] -> c[batch,M,N]
 void batched_matmul(const float* a, const float* b, float* c, size_t batch, size_t M, size_t K, size_t N);
 
-
+// ---- bf16 operands -----------------------------------------------------------------
+void matmul_ex   (const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bool accumulate, size_t M, size_t K, size_t N);
+void matmul_bt_ex(const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bool accumulate, size_t M, size_t K, size_t N);
+void matmul_at_ex(const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bool accumulate, size_t M, size_t K, size_t N);
 
 
 // ---- row-wise kernels (cuda_reduce.cu) ---------------------------------------------
@@ -93,5 +102,9 @@ void  cross_entropy_backward(const float* logits, const float* targets, float* g
  
 // Sum of squares of n floats, accumulated in double. Returns on the host (SYNCHRONIZES).
 float sum_squares(const float* x, size_t n);
+
+void sum_squares_reset();
+void sum_squares_add(const float* x, size_t n);
+double sum_squares_read();
 
 } // namespace cuda

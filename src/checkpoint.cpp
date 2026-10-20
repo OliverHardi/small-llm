@@ -38,14 +38,14 @@ void save_checkpoint(const std::string& path, Model& model, const AdamW& optimiz
 
         for (const Param& p : params) {
             write_pod(out, static_cast<uint32_t>(p.name.size()));
-            const Tensor host = p.value->to(Device::CPU);
-            out.write(reinterpret_cast<const char*>(host.data()), host.numel() * sizeof(float));
- 
+            out.write(p.name.data(), p.name.size());
+
             const std::vector<size_t>& shape = p.value->shape();
             write_pod(out, static_cast<uint32_t>(shape.size()));
             for (size_t d : shape) write_pod(out, static_cast<uint64_t>(d));
- 
-            out.write(reinterpret_cast<const char*>(p.value->data()), p.value->numel() * sizeof(float));
+
+            const Tensor host = p.value->to(Device::CPU);
+            out.write(reinterpret_cast<const char*>(host.data()), host.numel() * sizeof(float));
         }
         // save optimizer moment and step count
         optimizer.save(out);

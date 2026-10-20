@@ -8,7 +8,32 @@
 #include "cuda/cuda_ops.h"
 #endif
 
-Tensor ops::matmul(const Tensor& a, const Tensor& b) {
+#ifdef USE_CUDA
+namespace {
+using GemmEx = void (*)(const uint16_t*, const uint16_t*, void*, bool, bool, size_t, size_t, size_t);
+
+void check_bf16_pair(const Tensor& a, const Tensor& b, const char* op) {
+    require_same_device(a, b, op);
+    if (!a.is_cuda() || !a.is_bf16() || !b.is_bf16())
+        throw std::invalid_argument(std::string(op) + ": bf16 path needs two bf16 CUDA tensors");
+}
+
+Tensor bf16_gemm(GemmEx fn, const char* op, const Tensor& a, const Tensor& b,
+                 size_t M, size_t K, size_t N, DType out_dtype) {
+    check_bf16_pair(a, b, op);
+    Tensor output({M, N}, Device::CUDA, out_dtype);
+    void* c = output.is_bf16() ? static_cast<void*>(output.bf16_data()) : static_cast<void*>(output.data());
+    fn(a.bf16_data(), b.bf16_data(), c, output.is_bf16(), false, M, K, N);
+    return output;
+}
+} // namespace
+#endif
+
+static void require_f32_out(DType out, const char* op) {
+    if (out != DType::F32) throw std::invalid_argument(std::string(op) + ": fp32 inputs need out = F32");
+}
+
+Tensor ops::matmul(const Tensor& a, const Tensor& b, DType out) {
     if (a.ndim() != 2 || b.ndim() != 2) {
         throw std::runtime_error(
             "matmul currently only supports 2D tensors"
@@ -21,11 +46,17 @@ Tensor ops::matmul(const Tensor& a, const Tensor& b) {
     const size_t N = b.dim(1);
 
     #ifdef USE_CUDA
+    if (a.is_bf16() || b.is_bf16())
+        return bf16_gemm(&cuda::matmul_ex, "matmul", a, b, M, K, N, out);
+    #endif
+    require_f32_out(out, "matmul");
+
+    #ifdef USE_CUDA
     if (a.is_cuda()) {
         require_same_device(a, b, "matmul");
-        Tensor out({M, N}, Device::CUDA);
-        cuda::matmul(a.data(), b.data(), out.data(), M, K, N);
-        return out;
+        Tensor output({M, N}, Device::CUDA);
+        cuda::matmul(a.data(), b.data(), output.data(), M, K, N);
+        return output;
     }
     #endif
     
@@ -42,6 +73,10 @@ Tensor ops::matmul(const Tensor& a, const Tensor& b) {
     }
 
     return result;
+}
+
+Tensor ops::matmul(const Tensor& a, const Tensor& b) {
+    return matmul(a, b, a.is_bf16() ? DType::BF16 : DType::F32);
 }
 
 Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
@@ -91,9 +126,9 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
     #ifdef USE_CUDA
     if (a.is_cuda() || b.is_cuda()) {
         require_same_device(a, b, "batched_matmul");
-        Tensor out(result_shape, Device::CUDA);
-        cuda::batched_matmul(a.data(), b.data(), out.data(), num_batches, M, K, N);
-        return out;
+        Tensor output(result_shape, Device::CUDA);
+        cuda::batched_matmul(a.data(), b.data(), output.data(), num_batches, M, K, N);
+        return output;
     }
     #endif
 
@@ -127,16 +162,25 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
 
 }
 
-// a[M,K] @ b[N,K]^T -> [M,N]. Both inner loops walk contiguous memory.
 Tensor ops::matmul_bt(const Tensor& a, const Tensor& b) {
+    return matmul_bt(a, b, a.is_bf16() ? DType::BF16 : DType::F32);
+}
+
+Tensor ops::matmul_bt(const Tensor& a, const Tensor& b, DType out) {
     const size_t M = a.dim(0), K = a.dim(1), N = b.dim(0);
+
+    #ifdef USE_CUDA
+    if (a.is_bf16() || b.is_bf16())
+        return bf16_gemm(&cuda::matmul_bt_ex, "matmul_bt", a, b, M, K, N, out);
+    #endif
+    require_f32_out(out, "matmul_bt");
 
     #ifdef USE_CUDA
         if (a.is_cuda() || b.is_cuda()) {
             require_same_device(a, b, "matmul_bt");
-            Tensor out({M, N}, Device::CUDA);
-            cuda::matmul_bt(a.data(), b.data(), out.data(), M, K, N);
-            return out;
+            Tensor output({M, N}, Device::CUDA);
+            cuda::matmul_bt(a.data(), b.data(), output.data(), M, K, N);
+            return output;
         }
     #endif
 
@@ -153,14 +197,24 @@ Tensor ops::matmul_bt(const Tensor& a, const Tensor& b) {
 
 // a[K,M]^T @ b[K,N] -> [M,N]. k outermost so b and c are read/written row-contiguously.
 Tensor ops::matmul_at(const Tensor& a, const Tensor& b) {
+    return matmul_at(a, b, a.is_bf16() ? DType::BF16 : DType::F32);
+}
+
+Tensor ops::matmul_at(const Tensor& a, const Tensor& b, DType out) {
     const size_t K = a.dim(0), M = a.dim(1), N = b.dim(1);
+
+    #ifdef USE_CUDA
+    if (a.is_bf16() || b.is_bf16())
+        return bf16_gemm(&cuda::matmul_at_ex, "matmul_at", a, b, M, K, N, out);
+    #endif
+    require_f32_out(out, "matmul_at");
 
     #ifdef USE_CUDA
         if (a.is_cuda() || b.is_cuda()) {
             require_same_device(a, b, "matmul_at");
-            Tensor out({M, N}, Device::CUDA);
-            cuda::matmul_at(a.data(), b.data(), out.data(), M, K, N);
-            return out;
+            Tensor output({M, N}, Device::CUDA);
+            cuda::matmul_at(a.data(), b.data(), output.data(), M, K, N);
+            return output;
         }
     #endif
 
@@ -172,4 +226,18 @@ Tensor ops::matmul_at(const Tensor& a, const Tensor& b) {
         }
     }
     return c;
+}
+
+// grad(fp32) += a^T @ b with a, b bf16: cuBLAS beta = 1, no temporary.
+void ops::matmul_at_accumulate(const Tensor& a, const Tensor& b, Tensor& grad) {
+#ifdef USE_CUDA
+    const size_t K = a.dim(0), M = a.dim(1), N = b.dim(1);
+    check_bf16_pair(a, b, "matmul_at_accumulate");
+    if (grad.dtype() != DType::F32 || !grad.is_cuda() || grad.dim(0) != M || grad.dim(1) != N)
+        throw std::invalid_argument("matmul_at_accumulate: grad must be fp32 CUDA [M,N]");
+    cuda::matmul_at_ex(a.bf16_data(), b.bf16_data(), grad.data(), false, true, M, K, N);
+#else
+    (void)a; (void)b; (void)grad;
+    throw std::runtime_error("matmul_at_accumulate: built without CUDA support");
+#endif
 }

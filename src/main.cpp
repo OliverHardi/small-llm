@@ -1,6 +1,9 @@
 #include <iostream>
-
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include "config.h"
+#include <chrono>
 
 #include "data/dataloader.h"
 #include "data/dataset.h"
@@ -13,42 +16,40 @@
 #include "inference.h"
 #include "checkpoint.h"
 
-#include "ops/elementwise.h"
-
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
+#ifdef USE_CUDA
+#include "cuda/cuda_ops.h"
+#endif
 
 #ifdef USE_CUDA
 int run_cuda_parity_tests();
 int run_model_parity_test();
+int run_cudnn_attention_test();
+int run_bf16_stage12_test();
 #endif
 
 int main() {
 
-    #ifdef USE_CUDA
-    try {
-        return run_cuda_parity_tests() + run_model_parity_test();
-    } catch (const std::exception& e) {
-        std::printf("CUDA test failed: %s\n", e.what());
-        return 1;
-    }
-    #endif
+    // #ifdef USE_CUDA
+    // try {
+    //     return run_cuda_parity_tests() + run_model_parity_test() + run_cudnn_attention_test() + run_bf16_stage12_test();
+    // } catch (const std::exception& e) {
+    //     std::printf("CUDA test failed: %s\n", e.what());
+    //     return 1;
+    // }
+    // return 0;
+    // #endif
 
-    return 0;
 
     ModelConfig modelConfig;
-
-    // tiny model for cpu testing
-    modelConfig.context_length = 32;
-    modelConfig.num_layers = 2;
-    modelConfig.d_model = 64;
-    modelConfig.num_heads = 4;
-    modelConfig.ffn_hidden = 172;
-
     TrainingConfig trainingConfig;
 
-    trainingConfig.batch_size = 2;
+    // tiny model for cpu testing
+    // modelConfig.context_length = 32;
+    // modelConfig.num_layers = 2;
+    // modelConfig.d_model = 64;
+    // modelConfig.num_heads = 4;
+    // modelConfig.ffn_hidden = 172;
+
 
     Tensor::seed(modelConfig.seed);
 
@@ -74,6 +75,13 @@ int main() {
 
     Model model(modelConfig);
 
+    #ifdef USE_CUDA
+    const Device device = Device::CUDA;
+    #else
+    const Device device = Device::CPU;
+    #endif
+    model.to(device);
+
     AdamW optimizer(model.parameters());
 
     size_t start_step = 0;
@@ -87,26 +95,87 @@ int main() {
         total_steps                     // total steps (training tokens / (context length * batch size))
     );
 
-    // save_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer, TrainState{0, dataloader.position()});
+    const size_t accum = trainingConfig.grad_accum_steps;
 
-    // TrainState state = load_checkpoint("checkpoints/checkpoint_test.bin", model, optimizer);
-    // dataloader.setPosition(state.data_position);
-    // start_step = state.step;
-    
+    // temp timing
+    auto sync = [] {
+    #ifdef USE_CUDA
+        cuda::synchronize();
+    #endif
+    };
+    using Clock = std::chrono::steady_clock;
+    auto ms_since = [](Clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+    };
+
+    const size_t warmup = 3, timed_steps = 20;
+    double t_data = 0, t_fwd = 0, t_bwd = 0, t_clip = 0, t_opt = 0, t_total = 0;
+
+    for (size_t step = start_step; step < start_step + warmup + timed_steps; ++step) {
+        const float lr = 1e-3f;
+        const auto t_step = Clock::now();
+        double d_data = 0, d_fwd = 0, d_bwd = 0;     // summed over the micro-batches
+
+        model.zero_grad();
+        float loss_sum = 0.0f;
+        for (size_t micro = 0; micro < accum; ++micro) {
+            auto t = Clock::now();
+            const Batch batch = dataloader.nextBatch();
+            Tensor targets = batch.targets().to(device);
+            sync();                       d_data += ms_since(t);  t = Clock::now();
+
+            Tensor logits = model.forward(batch.inputs(), batch.batch_size, batch.T());
+            loss_sum += ops::cross_entropy(logits, targets);
+            sync();                       d_fwd += ms_since(t);   t = Clock::now();
+
+            model.backward(ops::cross_entropy_backward(logits, targets));
+            sync();                       d_bwd += ms_since(t);
+        }
+        const float loss = loss_sum / static_cast<float>(accum);
+
+        auto t = Clock::now();
+        const float grad_norm = clip_grad_norm(model.parameters(), 1.0f, 1.0f / static_cast<float>(accum));
+        sync();                           const double d_clip = ms_since(t);  t = Clock::now();
+
+        optimizer.step(lr);
+        sync();                           const double d_opt = ms_since(t);
+
+        if (step >= start_step + warmup) {
+            t_data += d_data; t_fwd += d_fwd; t_bwd += d_bwd; t_clip += d_clip; t_opt += d_opt;
+            t_total += ms_since(t_step);
+        }
+        std::printf("  step %4zu  loss %.4f  grad_norm %.4f\n", step, loss, grad_norm);
+    }
+
+    const double n = static_cast<double>(timed_steps);
+    const double tokens = static_cast<double>(accum) * trainingConfig.batch_size * modelConfig.context_length;
+    std::printf("\nper optimizer step (avg of %zu, %zu micro-batches, %.0f tokens): total %.0f ms  (%.0f tokens/s)\n",
+                timed_steps, accum, tokens, t_total / n, tokens / (t_total / n / 1000.0));
+    std::printf("  data %.1f | forward+loss %.1f | backward %.1f | clip %.1f | adamw %.1f  (ms)\n",
+                t_data / n, t_fwd / n, t_bwd / n, t_clip / n, t_opt / n);
+    std::printf("  per batch: total %.1f ms\n", t_total / n / static_cast<double>(accum) / static_cast<double>(trainingConfig.batch_size));
+
+    return 0;
+
     for (size_t step = start_step; step < total_steps; ++step) {
         const float lr = scheduler.lr(step);
         
         model.zero_grad();
 
-        const Batch batch = dataloader.nextBatch();
-        Tensor targets = batch.targets();
+        float loss_sum = 0.0f;
+        for (size_t micro = 0; micro < accum; ++micro) {
+            const Batch batch = dataloader.nextBatch();
+            Tensor targets = batch.targets().to(device);
 
-        Tensor logits = model.forward(batch.inputs(), batch.batch_size, batch.T());
-        const float loss = ops::cross_entropy(logits, targets);
+            Tensor logits = model.forward(batch.inputs(), batch.batch_size, batch.T());
+            loss_sum += ops::cross_entropy(logits, targets);
 
-        model.backward(ops::cross_entropy_backward(logits, targets));
+            model.backward(ops::cross_entropy_backward(logits, targets));
+        }
 
-        const float grad_norm = clip_grad_norm(model.parameters(), 1.0f);
+        const float loss = loss_sum / static_cast<float>(accum);
+
+        const float grad_norm = clip_grad_norm(model.parameters(), 1.0f, 1.0f / static_cast<float>(accum));
         
         optimizer.step(lr);
 

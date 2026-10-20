@@ -44,7 +44,7 @@ float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
         total_loss += loss;
     }
 
-    return total_loss / static_cast<float>(num_predictions);
+    return static_cast<float>(total_loss / static_cast<double_t>(num_predictions));
 }
 
 Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets) {

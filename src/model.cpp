@@ -8,8 +8,6 @@
 #include "ops/matmul.h"
 #include "ops/rmsnorm.h"
 
-#define FSTEP(msg) do { std::printf("    [fwd %s]\n", msg); std::fflush(stdout); } while (0)
-
 Model::Model(const ModelConfig& config)
     : config_(config),
       embedding_({config.vocab_size, config.d_model}),
@@ -42,21 +40,16 @@ Tensor Model::forward(const std::vector<uint32_t>& token_ids, size_t batch_size,
     seq_len_ = seq_len;
  
     // Embedding lookup
-    FSTEP("embedding");
     Tensor h = ops::embedding(token_ids_, embedding_).reshaped({batch_size, seq_len, d_model});
  
     // transformer
-    size_t block_index = 0;
     for (TransformerBlock& block : blocks_) {
-        std::printf("    [fwd block %zu]\n", block_index++); std::fflush(stdout);
         h = block.forward(h);
     }
  
     // final norm + tied LM head
-    FSTEP("final norm");
     final_norm_input_ = h;
     head_input_ = ops::rmsnorm(h, final_norm_weight_, kRmsNormEps_).reshaped({batch_size * seq_len, d_model});
-    FSTEP("lm head");
     Tensor logits = ops::matmul_bt(head_input_, embedding_);   // [B*T, V]
     return logits.reshaped({batch_size, seq_len, vocab});
 }

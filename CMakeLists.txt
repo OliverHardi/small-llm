@@ -66,10 +66,19 @@ endif()
 if(USE_CUDA)
     target_compile_definitions(main PRIVATE USE_CUDA=1)
 
+    # Optimize CUDA device code in Release builds
+    target_compile_options(main PRIVATE
+        $<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:CUDA>>:-O3>
+    )
+
     if(MSVC)
-        target_compile_options(main PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4>)
+        target_compile_options(main PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4>
+        )
     else()
-        target_compile_options(main PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>)
+        target_compile_options(main PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>
+        )
     endif()
 
     find_package(CUDAToolkit REQUIRED)

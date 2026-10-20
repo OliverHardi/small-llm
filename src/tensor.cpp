@@ -21,7 +21,6 @@ static size_t product(const std::vector<size_t>& shape) {
 
 Tensor::Storage::~Storage() {
 #ifdef USE_CUDA
-    // Never throw from a destructor.
     try { cuda::device_free(device); } catch (...) {}
 #endif
 }
@@ -32,7 +31,7 @@ void Tensor::allocate() {
         return;
     }
 #ifdef USE_CUDA
-    storage_->device = static_cast<float*>(cuda::device_alloc(numel_ * sizeof(float)));
+    storage_->device = cuda::device_alloc(nbytes());
 #else
     throw std::runtime_error("Tensor: built without CUDA support (define USE_CUDA)");
 #endif
@@ -58,8 +57,10 @@ Tensor::Tensor(const std::vector<size_t>& shape, float value)
     storage_->host.assign(numel_, value);
 }
 
-Tensor::Tensor(const std::vector<size_t>& shape, Device device)
-    : storage_(std::make_shared<Storage>()), shape_(shape), numel_(product(shape)), device_(device) {
+Tensor::Tensor(const std::vector<size_t>& shape, Device device, DType dtype)
+    : storage_(std::make_shared<Storage>()), shape_(shape), numel_(product(shape)), device_(device), dtype_(dtype) {
+    if (dtype == DType::BF16 && device == Device::CPU)
+        throw std::invalid_argument("Tensor: BF16 tensors are CUDA-only");
     calculateStrides();
     allocate();
 }
@@ -82,17 +83,35 @@ Tensor Tensor::to(Device target) const {
     }
 
 #ifdef USE_CUDA
+    if (dtype_ == DType::BF16) {
+        if (target == Device::CUDA) return *this;
+        return to_dtype(DType::F32).to(Device::CPU);
+    }
     Tensor result(shape_, target);
-    const size_t bytes = numel_ * sizeof(float);
- 
+    const size_t bytes = nbytes();
+
     if (target == Device::CUDA) {
         cuda::copy_h2d(result.data(), data(), bytes);
     } else {
-        cuda::copy_d2h(result.data(), data(), bytes);   // synchronizes
+        cuda::copy_d2h(result.data(), data(), bytes);
     }
     return result;
 #else
     throw std::runtime_error("Tensor::to: built without CUDA support (define USE_CUDA)");
+#endif
+}
+
+Tensor Tensor::to_dtype(DType target) const {
+    if (target == dtype_) return *this;
+#ifdef USE_CUDA
+    if (device_ != Device::CUDA)
+        throw std::logic_error("Tensor::to_dtype: BF16 is CUDA-only");
+    Tensor out(shape_, Device::CUDA, target);
+    if (target == DType::BF16) cuda::cast_f32_to_bf16(data(), out.bf16_data(), numel_);
+    else                       cuda::cast_bf16_to_f32(bf16_data(), out.data(), numel_);
+    return out;
+#else
+    throw std::runtime_error("Tensor::to_dtype: built without CUDA support (define USE_CUDA)");
 #endif
 }
 
@@ -105,7 +124,7 @@ void Tensor::fill(float value) {
 void Tensor::zero() {
     if (device_ == Device::CUDA) {
         #ifdef USE_CUDA
-        cuda::device_zero(data(), numel());
+        cuda::device_zero(raw(), nbytes());
         #endif
     } else {
         std::fill(data(), data() + numel(), 0.0f);
@@ -168,9 +187,8 @@ void Tensor::reshape(std::initializer_list<size_t> newShape) {
     reshape(std::vector<size_t>(newShape));
 }
 
-// A view: same data, new shape. No copy.
 Tensor Tensor::reshaped(const std::vector<size_t>& new_shape) const {
-    Tensor view = *this;      // shallow copy: shares storage_
+    Tensor view = *this;
     view.reshape(new_shape);
     return view;
 }
@@ -182,10 +200,10 @@ Tensor Tensor::reshaped(std::initializer_list<size_t> new_shape) const {
 // deep copy
 
 Tensor Tensor::clone() const {
-    Tensor out(shape_, device_);
+    Tensor out(shape_, device_, dtype_);
     if (device_ == Device::CUDA) {
         #ifdef USE_CUDA
-        cuda::copy_d2d(out.data(), data(), numel() * sizeof(float));
+        cuda::copy_d2d(out.raw(), raw(), nbytes());
         #endif
     } else {
         std::copy(data(), data() + numel(), out.data());

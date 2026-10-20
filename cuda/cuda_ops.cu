@@ -6,6 +6,50 @@
 namespace cuda {
 
 // =====================================================================================
+// Helpers
+// =====================================================================================
+__global__ void print_build_info() {
+#ifdef __CUDA_ARCH__
+    printf("CUDA device architecture: %d\n", __CUDA_ARCH__);
+#endif
+
+#ifdef __CUDA_DEBUG__
+    printf("CUDA debug compilation enabled\n");
+#endif
+}
+
+void print_device_build_info() {
+    print_build_info<<<1, 1>>>();
+    CUDA_LAUNCH_CHECK();
+}
+
+cudaEvent_t timer_start;
+cudaEvent_t timer_stop;
+bool timer_initialized = false;
+
+void initCudaTimer() {
+    if (!timer_initialized) {
+        cudaEventCreate(&timer_start);
+        cudaEventCreate(&timer_stop);
+        timer_initialized = true;
+    }
+}
+
+void startCudaTimer() {
+    initCudaTimer();
+    cudaEventRecord(timer_start);
+}
+
+float stopCudaTimer() {
+    cudaEventRecord(timer_stop);
+    cudaEventSynchronize(timer_stop);
+
+    float ms = 0.0f;
+    cudaEventElapsedTime(&ms, timer_start, timer_stop);
+    return ms;
+}
+
+// =====================================================================================
 // Elementwise: one thread per element. `i` is size_t so >2^31 elements can't overflow.
 // =====================================================================================
 

@@ -4,6 +4,8 @@
 
 namespace ops {
 
+void set_cudnn_enabled(bool enabled);
+
 struct AttentionOutput {
     Tensor out;     // [B, H, T, hd]
     Tensor stats;   // log-sum-exp per row [B, H, T]; for flash attention backwards pass later

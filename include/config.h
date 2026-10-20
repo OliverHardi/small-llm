@@ -47,9 +47,10 @@ struct ModelConfig {
 };
 
 struct TrainingConfig {
-    size_t batch_size = 2;
+    size_t batch_size = 3;
 
     float learning_rate = 3e-4f;
     float weight_decay = 0.1f;
 
+    size_t grad_accum_steps = 8;
 };

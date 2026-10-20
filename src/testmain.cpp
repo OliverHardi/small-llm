@@ -238,3 +238,85 @@ int run_model_parity_test() {
 }
 
 #endif // USE_CUDA
+
+#ifdef USE_CUDNN
+int run_cudnn_attention_test() {
+    failures = 0;
+    std::printf("cuDNN attention (bf16) vs fp32 unfused, both on GPU\n");
+    const size_t B = 2, H = 4, T = 128, D = 64;
+    Tensor q = G(randn({B, H, T, D}, 1)), k = G(randn({B, H, T, D}, 2)), v = G(randn({B, H, T, D}, 3));
+    Tensor go = G(randn({B, H, T, D}, 4));
+
+    ops::set_cudnn_enabled(false);
+    ops::AttentionOutput ref = ops::attention(q, k, v, true);
+    ops::AttentionGrads gref = ops::attention_backward(q, k, v, ref.out, ref.stats, go, true);
+
+    ops::set_cudnn_enabled(true);
+    ops::AttentionOutput got = ops::attention(q, k, v, true);    // first call builds the graphs: can take a few seconds
+    ops::AttentionGrads ggot = ops::attention_backward(q, k, v, got.out, got.stats, go, true);
+
+    report("cudnn forward", rel_error(ref.out.to(Device::CPU), got.out), 3e-2f);
+    report("cudnn dq", rel_error(gref.dq.to(Device::CPU), ggot.dq), 3e-2f);
+    report("cudnn dk", rel_error(gref.dk.to(Device::CPU), ggot.dk), 3e-2f);
+    report("cudnn dv", rel_error(gref.dv.to(Device::CPU), ggot.dv), 3e-2f);
+    return failures;
+}
+#endif // USE_CUDNN
+
+// ---- paste into testmain.cpp (uses your rel_error, report, randn); declare + call it from main's test mode ----
+#ifdef USE_CUDA
+int run_bf16_stage12_test() {
+    std::printf("\n== bf16 stage 1-2 ==\n");
+    int fails = 0;
+    auto check = [&](const char* name, double err, double tol) {
+        const bool ok = err < tol;
+        std::printf("  %-34s err %.2e  tol %.0e  %s\n", name, err, tol, ok ? "ok" : "FAIL");
+        if (!ok) ++fails;
+    };
+    auto throws = [](auto f) { try { f(); } catch (const std::logic_error&) { return true; } return false; };
+
+    // 1. dtype round trip: only bf16 rounding (~2^-8 relative)
+    Tensor x = randn({64, 640}, 1, 1.0f);
+    Tensor xb = x.to(Device::CUDA).to_dtype(DType::BF16);
+    check("cast round trip", rel_error(x, xb), 1e-2);
+    if (xb.nbytes() != x.numel() * 2) { std::printf("  FAIL nbytes\n"); ++fails; }
+
+    // 2. wrong accessor throws
+    if (!throws([&] { xb.data(); }))      { std::printf("  FAIL data() on bf16 did not throw\n"); ++fails; }
+    if (!throws([&] { x.bf16_data(); }))  { std::printf("  FAIL bf16_data() on f32 did not throw\n"); ++fails; }
+
+    // 3. clone / zero on bf16 (bytes, not elements)
+    check("bf16 clone", rel_error(x, xb.clone()), 1e-2);
+    Tensor z = xb.clone(); z.zero();
+    check("bf16 zero", rel_error(Tensor({64, 640}), z), 1e-6);   // cpu reference is all zeros; err = max|z|
+
+    // 4. typed matmuls vs fp32 CPU reference
+    const size_t M = 96, K = 160, N = 64;
+    Tensor a  = randn({M, K}, 2, 1.0f), b  = randn({K, N}, 3, 1.0f);   // nn
+    Tensor bt = randn({N, K}, 4, 1.0f);                                 // bt: b is [N,K]
+    Tensor at = randn({K, M}, 5, 1.0f);                                 // at: a is [K,M]
+    auto B = [](const Tensor& t) { return t.to(Device::CUDA).to_dtype(DType::BF16); };
+    // NOTE: reference uses the same bf16-rounded inputs, so only accumulation/output rounding remains
+    auto R = [&](const Tensor& t) { return B(t).to(Device::CPU); };
+
+    check("matmul    bf16->bf16", rel_error(ops::matmul(R(a), R(b)),      ops::matmul(B(a), B(b))),       1e-2);
+    check("matmul    bf16->f32 ", rel_error(ops::matmul(R(a), R(b)),      ops::matmul(B(a), B(b), DType::F32)), 1e-4);
+    check("matmul_bt bf16->bf16", rel_error(ops::matmul_bt(R(a), R(bt)),  ops::matmul_bt(B(a), B(bt))),   1e-2);
+    check("matmul_at bf16->bf16", rel_error(ops::matmul_at(R(at), R(b)),  ops::matmul_at(B(at), B(b))),   1e-2);
+
+    // 5. accumulate: grad += at^T @ b, twice -> 2x
+    Tensor grad({M, N}, Device::CUDA); grad.zero();
+    ops::matmul_at_accumulate(B(at), B(b), grad);
+    ops::matmul_at_accumulate(B(at), B(b), grad);
+    Tensor ref = ops::matmul_at(R(at), R(b));
+    for (size_t i = 0; i < ref.numel(); ++i) ref[i] *= 2.0f;
+    check("matmul_at_accumulate x2", rel_error(ref, grad), 1e-4);
+
+    // 6. mixed dtypes must throw
+    if (!throws([&] { ops::matmul(B(a), b.to(Device::CUDA)); }) ||
+        !throws([&] { ops::matmul(a.to(Device::CUDA), B(b)); })) { std::printf("  FAIL mixed dtype\n"); ++fails; }
+
+    std::printf(fails ? "  bf16 stage 1-2: %d FAILED\n" : "  bf16 stage 1-2: ALL PASSED\n", fails);
+    return fails;
+}
+#endif

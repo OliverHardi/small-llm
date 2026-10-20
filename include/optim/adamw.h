@@ -6,7 +6,7 @@
 #include "model.h"
 #include "tensor.h"
 
-float clip_grad_norm(const std::vector<Param>& params, float max_norm);
+float clip_grad_norm(const std::vector<Param>& params, float max_norm, float grad_scale);
 
 class AdamW {
 public:
