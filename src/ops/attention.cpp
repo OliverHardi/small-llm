@@ -1,6 +1,7 @@
 #include "ops/attention.h"
  
 #include <cmath>
+#include <stdexcept>
  
 #include "ops/elementwise.h"
 #include "ops/matmul.h"
@@ -92,6 +93,11 @@ Tensor ops::split_heads(const Tensor& x, size_t num_heads) {
 
     #ifdef USE_CUDA
         if (x.is_cuda()) {
+            if (x.is_bf16()) {
+                Tensor out({B, num_heads, T, hd}, Device::CUDA, DType::BF16);
+                cuda::split_heads(x.bf16_data(), out.bf16_data(), B, T, num_heads, hd);
+                return out;
+            }
             Tensor out({B, num_heads, T, hd}, Device::CUDA);
             cuda::split_heads(x.data(), out.data(), B, T, num_heads, hd);
             return out;
@@ -113,6 +119,11 @@ Tensor ops::merge_heads(const Tensor& x) {
 
     #ifdef USE_CUDA
         if (x.is_cuda()) {
+            if (x.is_bf16()) {
+                Tensor out({B, T, H * hd}, Device::CUDA, DType::BF16);
+                cuda::merge_heads(x.bf16_data(), out.bf16_data(), B, T, H, hd);
+                return out;
+            }
             Tensor out({B, T, H * hd}, Device::CUDA);
             cuda::merge_heads(x.data(), out.data(), B, T, H, hd);
             return out;
@@ -128,9 +139,24 @@ Tensor ops::merge_heads(const Tensor& x) {
     return out;
 }
 
-// CPU forward. `stats` (the log-sum-exp a flash backward needs) is left empty here:
-// the CPU backward recomputes P from q and k instead.
+// forward
 ops::AttentionOutput ops::attention(const Tensor& q, const Tensor& k, const Tensor& v, bool causal) {
+
+    // bf16 tensors go straight into cuDNN: no casts, no fp32 copies.
+    if (q.is_bf16()) {
+        #ifdef USE_CUDNN
+        if (!use_cudnn(q, causal)) throw std::runtime_error("attention: bf16 needs cuDNN enabled, causal, head_dim % 8 == 0 and <= 128");
+        const size_t B = q.dim(0), H = q.dim(1), T = q.dim(2), D = q.dim(3);
+        AttentionOutput result;
+        result.stats = Tensor({B, H, T, 1}, Device::CUDA);                       // fp32 softmax stats
+        result.out = Tensor({B, H, T, D}, Device::CUDA, DType::BF16);
+        cudnn_for(B, H, T, D).forward(q.bf16_data(), k.bf16_data(), v.bf16_data(),
+                                      result.out.bf16_data(), result.stats.data(), 0);
+        return result;
+        #else
+        throw std::runtime_error("attention: bf16 needs a USE_CUDNN build");
+        #endif
+    }
 
     #ifdef USE_CUDNN
     if (use_cudnn(q, causal)) {
@@ -157,12 +183,27 @@ ops::AttentionOutput ops::attention(const Tensor& q, const Tensor& k, const Tens
     return result;
 }
 
-// CPU backward. P is recomputed from q and k, so only the inputs need to be kept
-// (this is the "recompute" strategy; a flash kernel does the same with the saved stats).
-// `out` and `stats` are unused here but part of the interface so a GPU version can use them.
+// backward
 ops::AttentionGrads ops::attention_backward(const Tensor& q, const Tensor& k, const Tensor& v,
                                             const Tensor& out, const Tensor& stats,
                                             const Tensor& grad_out, bool causal) {
+
+    if (q.is_bf16()) {
+        #ifdef USE_CUDNN
+        if (!use_cudnn(q, causal) || stats.numel() == 0) throw std::runtime_error("attention_backward: bf16 needs the cuDNN forward's stats");
+        const size_t B = q.dim(0), H = q.dim(1), T = q.dim(2), D = q.dim(3);
+        AttentionGrads grads;
+        grads.dq = Tensor(q.shape(), Device::CUDA, DType::BF16);
+        grads.dk = Tensor(q.shape(), Device::CUDA, DType::BF16);
+        grads.dv = Tensor(q.shape(), Device::CUDA, DType::BF16);
+        cudnn_for(B, H, T, D).backward(q.bf16_data(), k.bf16_data(), v.bf16_data(), out.bf16_data(),
+                                       grad_out.bf16_data(), stats.data(),
+                                       grads.dq.bf16_data(), grads.dk.bf16_data(), grads.dv.bf16_data(), 0);
+        return grads;
+        #else
+        throw std::runtime_error("attention_backward: bf16 needs a USE_CUDNN build");
+        #endif
+    }
 
     #ifdef USE_CUDNN
         if (use_cudnn(q, causal) && stats.numel() > 0) {     // empty stats = forward ran unfused

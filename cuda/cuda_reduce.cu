@@ -4,12 +4,11 @@
 #include <cfloat>
 #include <cmath>
 
-// Row-wise kernels. Pattern: ONE BLOCK PER ROW, 256 threads stride across the row, then
-// combine the threads' partial results with a block reduction (warp shuffles, then one
-// value per warp through shared memory).
-//
-// Every row-wise kernel below must be launched with a block size that is a multiple of
-// 32 (kBlockSize = 256), and every thread in the block must reach the block_* calls.
+#include "cuda/cuda_dtype.cuh"
+
+// Row-wise kernels
+// one block per row, 256 threads stride across the row
+// then combine the threads' partial results with a block reduction
 
 namespace cuda {
 
@@ -46,7 +45,7 @@ __device__ T block_sum(T v) {
     __syncthreads();
 
     const T result = shared[0];
-    __syncthreads();            // shared[] may be reused by the next call
+    __syncthreads();
     return result;
 }
 
@@ -79,7 +78,8 @@ __device__ float block_max(float v) {
 
 // ---- RMSNorm -----------------------------------------------------------------------
 
-__global__ void rmsnorm_kernel(const float* x, const float* w, float* out, size_t D, float eps) {
+template <typename EO>
+__global__ void rmsnorm_kernel(const float* x, const float* w, EO* out, size_t D, float eps) {
     const size_t base = blockIdx.x * D;
 
     float sum_sq = 0.0f;
@@ -87,11 +87,12 @@ __global__ void rmsnorm_kernel(const float* x, const float* w, float* out, size_
     sum_sq = block_sum(sum_sq);
 
     const float inv_rms = 1.0f / sqrtf(sum_sq / static_cast<float>(D) + eps);
-    for (size_t i = threadIdx.x; i < D; i += blockDim.x) out[base + i] = w[i] * x[base + i] * inv_rms;
+    for (size_t i = threadIdx.x; i < D; i += blockDim.x) st(out, base + i, w[i] * x[base + i] * inv_rms);
 }
 
 // dx_i = r * w_i g_i - (r^3 / D) * x_i * sum_j(w_j g_j x_j);  dw_i += g_i x_i r
-__global__ void rmsnorm_backward_kernel(const float* x, const float* w, const float* g,
+template <typename EG>
+__global__ void rmsnorm_backward_kernel(const float* x, const float* w, const EG* g,
                                         float* dx, float* w_grad, size_t D, float eps) {
     const size_t base = blockIdx.x * D;
 
@@ -99,7 +100,7 @@ __global__ void rmsnorm_backward_kernel(const float* x, const float* w, const fl
     for (size_t i = threadIdx.x; i < D; i += blockDim.x) {
         const float xi = x[base + i];
         sum_sq += xi * xi;
-        dot += w[i] * g[base + i] * xi;
+        dot += w[i] * ld(g, base + i) * xi;
     }
     sum_sq = block_sum(sum_sq);
     dot = block_sum(dot);
@@ -109,10 +110,9 @@ __global__ void rmsnorm_backward_kernel(const float* x, const float* w, const fl
 
     for (size_t i = threadIdx.x; i < D; i += blockDim.x) {
         const float xi = x[base + i];
-        const float gi = g[base + i];
+        const float gi = ld(g, base + i);
         dx[base + i] = inv_rms * w[i] * gi - coeff * xi;
-        // Every row adds into the same D weight-grad entries, hence atomic. Rows * D atomics
-        // with heavy contention is the slow part; a two-stage reduction fixes it if it matters.
+        // rows * D atomics potentially slow
         atomicAdd(&w_grad[i], gi * xi * inv_rms);
     }
 }
@@ -135,7 +135,6 @@ __global__ void softmax_kernel(const float* x, float* out, size_t cols, bool cau
     }
     sum = block_sum(sum);
 
-    // Each thread only reads/writes the same j it wrote above, so no extra sync is needed.
     for (size_t j = threadIdx.x; j < cols; j += blockDim.x) {
         out[base + j] = (j < valid) ? out[base + j] / sum : 0.0f;
     }
@@ -154,7 +153,7 @@ __global__ void softmax_backward_kernel(const float* p, const float* g, float* d
 
 // ---- cross entropy -----------------------------------------------------------------
 
-// Per-row loss: logsumexp(logits) - logits[target].
+// per row loss: log-sum-exp(logits) - logits[target].
 __global__ void cross_entropy_kernel(const float* logits, const float* targets,
                                      float* row_loss, size_t vocab) {
     const size_t base = blockIdx.x * vocab;
@@ -173,7 +172,6 @@ __global__ void cross_entropy_kernel(const float* logits, const float* targets,
     }
 }
 
-// Single block: mean of n floats, accumulated in double.
 __global__ void mean_kernel(const float* values, size_t n, float* out) {
     double total = 0.0;
     for (size_t i = threadIdx.x; i < n; i += blockDim.x) total += values[i];
@@ -182,8 +180,9 @@ __global__ void mean_kernel(const float* values, size_t n, float* out) {
 }
 
 // grad = (softmax(logits) - onehot(target)) / N
+template <typename EG>
 __global__ void cross_entropy_backward_kernel(const float* logits, const float* targets,
-                                              float* grad, size_t vocab, float inv_n) {
+                                              EG* grad, size_t vocab, float inv_n) {
     const size_t base = blockIdx.x * vocab;
     const size_t target = static_cast<size_t>(targets[blockIdx.x]);
 
@@ -197,7 +196,7 @@ __global__ void cross_entropy_backward_kernel(const float* logits, const float* 
 
     for (size_t j = threadIdx.x; j < vocab; j += blockDim.x) {
         const float p = expf(logits[base + j] - max_logit) / sum_exp;
-        grad[base + j] = p * inv_n - (j == target ? inv_n : 0.0f);
+        st(grad, base + j, p * inv_n - (j == target ? inv_n : 0.0f));
     }
 }
 
@@ -205,7 +204,6 @@ __global__ void cross_entropy_backward_kernel(const float* logits, const float* 
 
 constexpr unsigned kMaxPartials = 1024;
 
-// Grid-stride: each block writes one double partial.
 __global__ void sum_squares_partial_kernel(const float* x, size_t n, double* partials) {
     double local = 0.0;
     const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
@@ -239,7 +237,6 @@ __global__ void sum_partials_kernel(const double* partials, unsigned count, doub
     if (threadIdx.x == 0) *out = total;
 }
 
-// Scratch that persists across calls (allocated on first use, never freed).
 template <typename T>
 T* scratch(size_t count, T*& ptr, size_t& capacity) {
     if (count > capacity) {
@@ -255,12 +252,12 @@ T* scratch(size_t count, T*& ptr, size_t& capacity) {
 // =====================================================================================
 
 void rmsnorm(const float* x, const float* w, float* out, size_t rows, size_t D, float eps) {
-    ROW_LAUNCH(rmsnorm_kernel, rows, x, w, out, D, eps);
+    ROW_LAUNCH(rmsnorm_kernel<float>, rows, x, w, out, D, eps);
 }
 
 void rmsnorm_backward(const float* x, const float* w, const float* grad_out,
                       float* dx, float* w_grad, size_t rows, size_t D, float eps) {
-    ROW_LAUNCH(rmsnorm_backward_kernel, rows, x, w, grad_out, dx, w_grad, D, eps);
+    ROW_LAUNCH(rmsnorm_backward_kernel<float>, rows, x, w, grad_out, dx, w_grad, D, eps);
 }
 
 void softmax(const float* x, float* out, size_t rows, size_t cols, bool causal) {
@@ -290,7 +287,24 @@ float cross_entropy(const float* logits, const float* targets, size_t rows, size
 void cross_entropy_backward(const float* logits, const float* targets, float* grad,
                             size_t rows, size_t vocab) {
     const float inv_n = 1.0f / static_cast<float>(rows);
-    ROW_LAUNCH(cross_entropy_backward_kernel, rows, logits, targets, grad, vocab, inv_n);
+    ROW_LAUNCH(cross_entropy_backward_kernel<float>, rows, logits, targets, grad, vocab, inv_n);
+}
+
+// ---- bf16 variants ----
+
+void rmsnorm(const float* x, const float* w, uint16_t* out, size_t rows, size_t D, float eps) {
+    ROW_LAUNCH(rmsnorm_kernel<__nv_bfloat16>, rows, x, w, as_bf16(out), D, eps);
+}
+
+void rmsnorm_backward(const float* x, const float* w, const uint16_t* grad_out,
+                      float* dx, float* w_grad, size_t rows, size_t D, float eps) {
+    ROW_LAUNCH(rmsnorm_backward_kernel<__nv_bfloat16>, rows, x, w, as_bf16(grad_out), dx, w_grad, D, eps);
+}
+
+void cross_entropy_backward(const float* logits, const float* targets, uint16_t* grad,
+                            size_t rows, size_t vocab) {
+    const float inv_n = 1.0f / static_cast<float>(rows);
+    ROW_LAUNCH(cross_entropy_backward_kernel<__nv_bfloat16>, rows, logits, targets, as_bf16(grad), vocab, inv_n);
 }
 
 float sum_squares(const float* x, size_t n) {

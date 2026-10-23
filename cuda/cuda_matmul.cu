@@ -4,7 +4,7 @@
 #include <cstdlib>
 // cuBLAS is column-major; our tensors are row-major
 // we ask cuBLAS for the column-major product C^T = B^T @ A^T:
-// pass B first, then A, and swap the dimensions. No data is ever transposed.
+// pass B first, then A, and swap the dimensions. No data is ever transposed
 
 namespace cuda {
 

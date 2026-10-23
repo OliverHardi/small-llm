@@ -7,10 +7,6 @@
 
 // Causal flash attention on contiguous bf16 device tensors laid out [B, H, T, D],
 // backed by cuDNN's SDPA graphs. Build one object per (B, H, T, D) and reuse it every step:
-// graph construction is slow, execution is fast.
-//
-// The cudnn-frontend headers are only included in cudnn_attention.cpp (pimpl), so nothing
-// else in the project pays their compile time.
 class CudnnAttention {
 public:
     CudnnAttention(int64_t B, int64_t H, int64_t T, int64_t D);

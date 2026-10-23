@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 #ifdef USE_CUDA
 #include "cuda/cuda_ops.h"
@@ -18,8 +19,10 @@ Tensor apply_rope(const Tensor& x, float theta, float sign) {
     #ifdef USE_CUDA
         if (x.is_cuda()) {
             const size_t T = x.dim(x.ndim() - 2), hd = x.dim(x.ndim() - 1);
-            Tensor out(x.shape(), Device::CUDA);
-            cuda::rope(x.data(), out.data(), x.numel() / (T * hd), T, hd, theta, sign);
+            const size_t groups = x.numel() / (T * hd);
+            Tensor out(x.shape(), Device::CUDA, x.dtype());
+            if (x.is_bf16()) cuda::rope(x.bf16_data(), out.bf16_data(), groups, T, hd, theta, sign);
+            else             cuda::rope(x.data(), out.data(), groups, T, hd, theta, sign);
             return out;
         }
     #endif

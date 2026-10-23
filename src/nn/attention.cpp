@@ -45,7 +45,21 @@ Attention::Attention(const ModelConfig& config)
     out_weights_.randomNormal(0.0f, std_out);
 }
 
+void Attention::enable_bf16(bool on) {
+    bf16_ = on;
+    if (on) {
+        if (!q_weights_.is_cuda()) throw std::logic_error("Attention::enable_bf16: move the model to CUDA first");
+        q_w16_   = Tensor(q_weights_.shape(),   Device::CUDA, DType::BF16);
+        k_w16_   = Tensor(k_weights_.shape(),   Device::CUDA, DType::BF16);
+        v_w16_   = Tensor(v_weights_.shape(),   Device::CUDA, DType::BF16);
+        out_w16_ = Tensor(out_weights_.shape(), Device::CUDA, DType::BF16);
+    } else {
+        q_w16_ = k_w16_ = v_w16_ = out_w16_ = Tensor();
+    }
+}
+
 Tensor Attention::forward(const Tensor& x) {
+    if (bf16_) return forward_bf16(x);
     if (x.ndim() != 3 || x.dim(2) != d_model_) {
         throw std::invalid_argument("Attention::forward expects [B, T, d_model]");
     }
@@ -76,6 +90,7 @@ Tensor Attention::forward(const Tensor& x) {
 }
 
 Tensor Attention::backward(const Tensor& grad_output) {
+    if (bf16_) return backward_bf16(grad_output);
     if (grad_output.ndim() != 3 || grad_output.dim(2) != d_model_) {
         throw std::invalid_argument("Attention::backward expects [B, T, d_model]");
     }
@@ -115,5 +130,71 @@ Tensor Attention::backward(const Tensor& grad_output) {
     dx = ops::add(dx, ops::matmul_bt(dk_flat, k_weights_));
     dx = ops::add(dx, ops::matmul_bt(dv_flat, v_weights_));
  
+    return dx.reshaped({B, T, d_model_});
+}
+
+// ---- bf16 path ---------------------------------------------------------------------
+// bf16 forward version
+Tensor Attention::forward_bf16(const Tensor& x) {
+    if (x.ndim() != 3 || x.dim(2) != d_model_ || !x.is_bf16()) {
+        throw std::invalid_argument("Attention::forward (bf16) expects bf16 [B, T, d_model]");
+    }
+
+    const size_t B = x.dim(0);
+    const size_t T = x.dim(1);
+
+    input_flat_ = x.reshaped({B * T, d_model_});
+
+    Tensor q = project(input_flat_, q_w16_, B, T);
+    Tensor k = project(input_flat_, k_w16_, B, T);
+    Tensor v = project(input_flat_, v_w16_, B, T);
+
+    q_heads_ = ops::rope(ops::split_heads(q, num_heads_), rope_theta_);
+    k_heads_ = ops::rope(ops::split_heads(k, num_heads_), rope_theta_);
+    v_heads_ = ops::split_heads(v, num_heads_);
+
+    ops::AttentionOutput result = ops::attention(q_heads_, k_heads_, v_heads_, true);   // cuDNN
+    attn_out_ = result.out;
+    attn_stats_ = result.stats;
+
+    context_flat_ = ops::merge_heads(attn_out_).reshaped({B * T, d_model_});
+    return ops::matmul(context_flat_, out_w16_).reshaped({B, T, d_model_});
+}
+
+// bf16 backward version
+Tensor Attention::backward_bf16(const Tensor& grad_output) {
+    if (grad_output.ndim() != 3 || grad_output.dim(2) != d_model_) {
+        throw std::invalid_argument("Attention::backward expects [B, T, d_model]");
+    }
+
+    const size_t B = grad_output.dim(0);
+    const size_t T = grad_output.dim(1);
+
+    Tensor grad_flat = grad_output.to_dtype(DType::BF16).reshaped({B * T, d_model_});
+
+    ops::matmul_at_accumulate(context_flat_, grad_flat, out_grad_);
+    Tensor d_context = ops::split_heads(
+        ops::matmul_bt(grad_flat, out_w16_).reshaped({B, T, d_model_}), num_heads_
+    );
+
+    ops::AttentionGrads g = ops::attention_backward(
+        q_heads_, k_heads_, v_heads_, attn_out_, attn_stats_, d_context, true
+    );
+
+    Tensor d_q = ops::rope_backward(g.dq, rope_theta_);
+    Tensor d_k = ops::rope_backward(g.dk, rope_theta_);
+
+    Tensor dq_flat = ops::merge_heads(d_q).reshaped({B * T, d_model_});
+    Tensor dk_flat = ops::merge_heads(d_k).reshaped({B * T, d_model_});
+    Tensor dv_flat = ops::merge_heads(g.dv).reshaped({B * T, d_model_});
+
+    ops::matmul_at_accumulate(input_flat_, dq_flat, q_grad_);
+    ops::matmul_at_accumulate(input_flat_, dk_flat, k_grad_);
+    ops::matmul_at_accumulate(input_flat_, dv_flat, v_grad_);
+
+    Tensor dx = ops::matmul_bt(dq_flat, q_w16_, DType::F32);
+    ops::matmul_bt_accumulate(dk_flat, k_w16_, dx);
+    ops::matmul_bt_accumulate(dv_flat, v_w16_, dx);
+
     return dx.reshaped({B, T, d_model_});
 }

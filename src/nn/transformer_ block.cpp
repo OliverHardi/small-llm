@@ -17,14 +17,16 @@ TransformerBlock::TransformerBlock(const ModelConfig& config)
 }
 
 Tensor TransformerBlock::forward(const Tensor& x) {
-    input_ = x.clone();
+    const DType act = bf16_ ? DType::BF16 : DType::F32;
+
+    input_ = x;
 
     // attention
-    Tensor attn_out = attention_.forward(ops::rmsnorm(x, attention_norm_weight_, kRmsNormEps_));
-    residual1_ = ops::add(x, attn_out);
+    Tensor attn_out = attention_.forward(ops::rmsnorm(x, attention_norm_weight_, kRmsNormEps_, act));
+    residual1_ = ops::add(x, attn_out);          // fp32 + (bf16 or fp32) -> fp32
 
     // ffn
-    Tensor ffn_out = swiglu_.forward(ops::rmsnorm(residual1_, ffn_norm_weight_, kRmsNormEps_));
+    Tensor ffn_out = swiglu_.forward(ops::rmsnorm(residual1_, ffn_norm_weight_, kRmsNormEps_, act));
     return ops::add(residual1_, ffn_out);
 }
 

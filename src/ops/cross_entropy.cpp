@@ -7,6 +7,7 @@
 #include "cuda/cuda_ops.h"
 #endif
 
+// logits must be fp32
 float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
 
     size_t vocab_size = logits.dim(logits.ndim() - 1);
@@ -47,7 +48,7 @@ float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
     return static_cast<float>(total_loss / static_cast<double_t>(num_predictions));
 }
 
-Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets) {
+Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets, DType grad_dtype) {
     const size_t vocab_size = logits.dim(logits.ndim() - 1);
     const size_t num_predictions = logits.numel() / vocab_size;
     const float inv_n = 1.0f / static_cast<float>(num_predictions);
@@ -56,12 +57,19 @@ Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets) 
         if (logits.is_cuda()) {
             require_same_device(logits, targets, "cross_entropy_backward");
             const size_t V = logits.dim(logits.ndim() - 1);
-            Tensor grad(logits.shape(), Device::CUDA);
-            cuda::cross_entropy_backward(logits.data(), targets.data(), grad.data(),
-                                        logits.numel() / V, V);
+            Tensor grad(logits.shape(), Device::CUDA, grad_dtype);
+            if (grad.is_bf16()) {
+                cuda::cross_entropy_backward(logits.data(), targets.data(), grad.bf16_data(),
+                                             logits.numel() / V, V);
+            } else {
+                cuda::cross_entropy_backward(logits.data(), targets.data(), grad.data(),
+                                             logits.numel() / V, V);
+            }
             return grad;
         }
     #endif
+
+    if (grad_dtype != DType::F32) throw std::invalid_argument("cross_entropy_backward: bf16 grad is CUDA-only");
 
     Tensor grad(logits.shape());
 

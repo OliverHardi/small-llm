@@ -40,7 +40,7 @@ inline unsigned blocks_for(size_t n, int block = kBlockSize) {
     return static_cast<unsigned>((n + block - 1) / block);
 }
 
-// Shared cuBLAS handle, created on first use.
+// shared cuBLAS handle
 inline cublasHandle_t cublas_handle() {
     static cublasHandle_t handle = [] {
         cublasHandle_t h;

@@ -38,6 +38,14 @@ void accumulate(float* dst, const float* src, size_t n);                 // dst 
 void silu(const float* x, float* out, size_t n);
 void silu_backward(const float* x, const float* grad_out, float* out, size_t n);
 
+// bf16 variants (uint16_t = bf16 bits). All math in fp32, results rounded to bf16.
+void add(const uint16_t* a, const uint16_t* b, uint16_t* out, size_t n);         // bf16 + bf16 -> bf16
+void add(const float* a, const uint16_t* b, float* out, size_t n);               // fp32 + bf16 -> fp32 (residual stream)
+void accumulate(float* dst, const uint16_t* src, size_t n);                      // fp32 dst += bf16 src
+void multiply(const uint16_t* a, const uint16_t* b, uint16_t* out, size_t n);
+void silu(const uint16_t* x, uint16_t* out, size_t n);
+void silu_backward(const uint16_t* x, const uint16_t* grad_out, uint16_t* out, size_t n);
+
 void cast_f32_to_bf16(const float* src, uint16_t* dst, size_t n);
 void cast_bf16_to_f32(const uint16_t* src, float* dst, size_t n);
 
@@ -65,6 +73,10 @@ void transpose_batched(const float* x, float* out, size_t batch, size_t rows, si
 // sign = +1 forward, -1 backward.
 void rope(const float* x, float* out, size_t groups, size_t T, size_t head_dim,
           float theta, float sign);
+void rope(const uint16_t* x, uint16_t* out, size_t groups, size_t T, size_t head_dim,
+          float theta, float sign);
+void split_heads(const uint16_t* x, uint16_t* out, size_t B, size_t T, size_t H, size_t hd);
+void merge_heads(const uint16_t* x, uint16_t* out, size_t B, size_t T, size_t H, size_t hd);
 
 
 
@@ -82,6 +94,7 @@ void matmul_ex   (const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bo
 void matmul_bt_ex(const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bool accumulate, size_t M, size_t K, size_t N);
 void matmul_at_ex(const uint16_t* a, const uint16_t* b, void* c, bool c_bf16, bool accumulate, size_t M, size_t K, size_t N);
 
+void set_bf16_matmul(bool on);
 
 // ---- row-wise kernels (cuda_reduce.cu) ---------------------------------------------
 // rows = numel / D. y = w * x / sqrt(mean(x^2) + eps)
@@ -89,6 +102,10 @@ void rmsnorm(const float* x, const float* w, float* out, size_t rows, size_t D, 
 // writes dx; ACCUMULATES into w_grad (atomic, so tiny run-to-run differences are expected)
 void rmsnorm_backward(const float* x, const float* w, const float* grad_out,
                       float* dx, float* w_grad, size_t rows, size_t D, float eps);
+// bf16 variants: x (the fp32 residual stream) and w stay fp32.
+void rmsnorm(const float* x, const float* w, uint16_t* out, size_t rows, size_t D, float eps);     // out bf16
+void rmsnorm_backward(const float* x, const float* w, const uint16_t* grad_out,                    // grad_out bf16
+                      float* dx, float* w_grad, size_t rows, size_t D, float eps);                 // dx fp32
  
 // Softmax over the last axis. causal: rows are [.., T, T] and row r is query position r % cols;
 // entries with j > position come out exactly 0.
@@ -98,6 +115,8 @@ void softmax_backward(const float* probs, const float* grad_out, float* dx, size
 // Mean cross-entropy. targets are float class ids. Returns the loss on the host (SYNCHRONIZES).
 float cross_entropy(const float* logits, const float* targets, size_t rows, size_t vocab);
 void  cross_entropy_backward(const float* logits, const float* targets, float* grad,
+                             size_t rows, size_t vocab);
+void  cross_entropy_backward(const float* logits, const float* targets, uint16_t* grad,    // grad written as bf16
                              size_t rows, size_t vocab);
  
 // Sum of squares of n floats, accumulated in double. Returns on the host (SYNCHRONIZES).

@@ -1,7 +1,9 @@
 #include "ops/matmul.h"
 
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #ifdef USE_CUDA
@@ -162,6 +164,7 @@ Tensor ops::batched_matmul(const Tensor& a, const Tensor& b) {
 
 }
 
+// a[M,K] @ b[N,K]^T -> [M,N]. Both inner loops walk contiguous memory.
 Tensor ops::matmul_bt(const Tensor& a, const Tensor& b) {
     return matmul_bt(a, b, a.is_bf16() ? DType::BF16 : DType::F32);
 }
@@ -227,8 +230,7 @@ Tensor ops::matmul_at(const Tensor& a, const Tensor& b, DType out) {
     }
     return c;
 }
-
-// grad(fp32) += a^T @ b with a, b bf16: cuBLAS beta = 1, no temporary.
+// grad(fp32) += a^T @ b with a, b bf16
 void ops::matmul_at_accumulate(const Tensor& a, const Tensor& b, Tensor& grad) {
 #ifdef USE_CUDA
     const size_t K = a.dim(0), M = a.dim(1), N = b.dim(1);
@@ -239,5 +241,19 @@ void ops::matmul_at_accumulate(const Tensor& a, const Tensor& b, Tensor& grad) {
 #else
     (void)a; (void)b; (void)grad;
     throw std::runtime_error("matmul_at_accumulate: built without CUDA support");
+#endif
+}
+
+// out(fp32) += a @ b^T with a, b bf16
+void ops::matmul_bt_accumulate(const Tensor& a, const Tensor& b, Tensor& out) {
+#ifdef USE_CUDA
+    const size_t M = a.dim(0), K = a.dim(1), N = b.dim(0);
+    check_bf16_pair(a, b, "matmul_bt_accumulate");
+    if (out.dtype() != DType::F32 || !out.is_cuda() || out.dim(0) != M || out.dim(1) != N)
+        throw std::invalid_argument("matmul_bt_accumulate: out must be fp32 CUDA [M,N]");
+    cuda::matmul_bt_ex(a.bf16_data(), b.bf16_data(), out.data(), false, true, M, K, N);
+#else
+    (void)a; (void)b; (void)out;
+    throw std::runtime_error("matmul_bt_accumulate: built without CUDA support");
 #endif
 }

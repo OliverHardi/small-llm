@@ -15,6 +15,10 @@ public:
 
     Tensor backward(const Tensor& grad_output);
 
+    // call after the weights are on CUDA with bf16 mode
+    void enable_bf16(bool on);
+    bool bf16() const { return bf16_; }
+
     Tensor& q_weights()   { return q_weights_; }
     Tensor& k_weights()   { return k_weights_; }
     Tensor& v_weights()   { return v_weights_; }
@@ -25,7 +29,15 @@ public:
     Tensor& v_grad()   { return v_grad_; }
     Tensor& out_grad() { return out_grad_; }
 
+    Tensor& q_weights16()   { return q_w16_; }
+    Tensor& k_weights16()   { return k_w16_; }
+    Tensor& v_weights16()   { return v_w16_; }
+    Tensor& out_weights16() { return out_w16_; }
+
 private:
+    Tensor forward_bf16(const Tensor& x);
+    Tensor backward_bf16(const Tensor& grad_output);
+
     // weights [D, D]
     Tensor q_weights_;
     Tensor k_weights_;
@@ -37,6 +49,12 @@ private:
     Tensor k_grad_;
     Tensor v_grad_;
     Tensor out_grad_;
+
+    // bf16 shadows of the weights
+    Tensor q_w16_;
+    Tensor k_w16_;
+    Tensor v_w16_;
+    Tensor out_w16_;
 
     // forward cache for backward pass
     Tensor input_flat_;     // [B*T, D]
@@ -51,4 +69,5 @@ private:
     size_t num_heads_;
     size_t head_dim_;
     float  rope_theta_;
+    bool   bf16_ = false;
 };

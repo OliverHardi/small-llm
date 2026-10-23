@@ -1,9 +1,4 @@
-// The only file in the project that includes cudnn-frontend. Everything else sees
-// cudnn_attention.h, so the frontend's template compile time is paid here and nowhere else.
-//
-// Build as C++17 or newer. Include paths: the cudnn-frontend headers and the cuDNN/CUDA headers.
-// Link: cudnn (cudnn.lib on Windows) and cudart.
-
+// cudnn frontend
 #include "cudnn_attention.h"
 
 #include <cudnn.h>

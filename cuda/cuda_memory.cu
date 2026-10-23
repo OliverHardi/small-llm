@@ -9,7 +9,7 @@ struct Pool {
     std::unordered_map<size_t, std::vector<void*>> free_blocks;  // rounded size -> cached blocks
     std::unordered_map<void*, size_t> sizes;                     // every block we own -> its size
 };
-// Intentionally leaked: Tensor destructors can run during static destruction at exit.
+
 Pool& pool() { static Pool* p = new Pool; return *p; }
 size_t round_up(size_t n) { return (n + 511) & ~size_t(511); }
 
@@ -46,7 +46,7 @@ void* device_alloc(size_t bytes) {
 void device_free(void* ptr) {
     if (!ptr) return;
     Pool& p = pool();
-    p.free_blocks[p.sizes.at(ptr)].push_back(ptr);   // keep it for reuse; no cudaFree, no sync
+    p.free_blocks[p.sizes.at(ptr)].push_back(ptr);   // no cudaFree
 }
 
 void device_zero(void* ptr, size_t bytes) {

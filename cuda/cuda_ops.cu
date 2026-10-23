@@ -2,6 +2,7 @@
 #include "cuda/cuda_utils.h"
 
 #include <cuda_bf16.h>
+#include "cuda/cuda_dtype.cuh"
 
 namespace cuda {
 
@@ -50,7 +51,7 @@ float stopCudaTimer() {
 }
 
 // =====================================================================================
-// Elementwise: one thread per element. `i` is size_t so >2^31 elements can't overflow.
+// Elementwise: one thread per element
 // =====================================================================================
 
 #define ELEMENT_INDEX(n)                                                        \
@@ -74,9 +75,10 @@ __global__ void add_kernel(const float* a, const float* b, float* out, size_t n)
     out[i] = a[i] + b[i];
 }
 
-__global__ void multiply_kernel(const float* a, const float* b, float* out, size_t n) {
+template <typename E>
+__global__ void multiply_kernel(const E* a, const E* b, E* out, size_t n) {
     ELEMENT_INDEX(n)
-    out[i] = a[i] * b[i];
+    st(out, i, ld(a, i) * ld(b, i));
 }
 
 __global__ void multiply_scalar_kernel(const float* a, float s, float* out, size_t n) {
@@ -94,17 +96,19 @@ __global__ void accumulate_kernel(float* dst, const float* src, size_t n) {
     dst[i] += src[i];
 }
 
-__global__ void silu_kernel(const float* x, float* out, size_t n) {
+template <typename E>
+__global__ void silu_kernel(const E* x, E* out, size_t n) {
     ELEMENT_INDEX(n)
-    const float v = x[i];
-    out[i] = v / (1.0f + expf(-v));
+    const float v = ld(x, i);
+    st(out, i, v / (1.0f + expf(-v)));
 }
 
-__global__ void silu_backward_kernel(const float* x, const float* g, float* out, size_t n) {
+template <typename E>
+__global__ void silu_backward_kernel(const E* x, const E* g, E* out, size_t n) {
     ELEMENT_INDEX(n)
-    const float v = x[i];
+    const float v = ld(x, i);
     const float s = 1.0f / (1.0f + expf(-v));
-    out[i] = g[i] * s * (1.0f + v * (1.0f - s));
+    st(out, i, ld(g, i) * s * (1.0f + v * (1.0f - s)));
 }
 
 __global__ void f32_to_bf16_kernel(const float* src, __nv_bfloat16* dst, size_t n) {
@@ -134,13 +138,13 @@ __global__ void adamw_kernel(float* param, const float* grad, float* m, float* v
 
 void fill(float* x, float value, size_t n)                  { LAUNCH(fill_kernel, n, x, value, n); }
 void add(const float* a, const float* b, float* out, size_t n)      { LAUNCH(add_kernel, n, a, b, out, n); }
-void multiply(const float* a, const float* b, float* out, size_t n) { LAUNCH(multiply_kernel, n, a, b, out, n); }
+void multiply(const float* a, const float* b, float* out, size_t n) { LAUNCH(multiply_kernel<float>, n, a, b, out, n); }
 void multiply_scalar(const float* a, float s, float* out, size_t n) { LAUNCH(multiply_scalar_kernel, n, a, s, out, n); }
 void scale_inplace(float* x, float s, size_t n)             { LAUNCH(scale_inplace_kernel, n, x, s, n); }
 void accumulate(float* dst, const float* src, size_t n)     { LAUNCH(accumulate_kernel, n, dst, src, n); }
-void silu(const float* x, float* out, size_t n)             { LAUNCH(silu_kernel, n, x, out, n); }
+void silu(const float* x, float* out, size_t n)             { LAUNCH(silu_kernel<float>, n, x, out, n); }
 void silu_backward(const float* x, const float* g, float* out, size_t n) {
-    LAUNCH(silu_backward_kernel, n, x, g, out, n);
+    LAUNCH(silu_backward_kernel<float>, n, x, g, out, n);
 }
 
 void cast_f32_to_bf16(const float* src, uint16_t* dst, size_t n) {
@@ -160,7 +164,7 @@ void adamw_step(float* param, const float* grad, float* m, float* v, size_t n,
 // Data movement
 // =====================================================================================
 
-// One thread per output element; consecutive threads write consecutive addresses.
+// One thread per output element
 __global__ void embedding_kernel(const float* table, const float* ids, float* out,
                                  size_t total, size_t d_model) {
     ELEMENT_INDEX(total)
@@ -170,9 +174,7 @@ __global__ void embedding_kernel(const float* table, const float* ids, float* ou
     out[i] = table[row * d_model + d];
 }
 
-// Several tokens can share a vocabulary row, so the accumulate must be atomic.
-// (Float atomics make the summation order nondeterministic: results can differ in the
-// last bits from run to run and from the CPU. Compare with a tolerance.)
+// Several tokens can share a vocabulary row, so the accumulate must be atomic
 __global__ void embedding_backward_kernel(const float* ids, const float* grad_out,
                                           float* grad_table, size_t total, size_t d_model) {
     ELEMENT_INDEX(total)
@@ -193,9 +195,9 @@ void embedding_backward(const float* ids, const float* grad_out, float* grad_tab
     LAUNCH(embedding_backward_kernel, total, ids, grad_out, grad_table, total, d_model);
 }
 
-// Indexed by the OUTPUT layout, so writes are coalesced.
 // [B, T, H*hd] -> [B, H, T, hd]
-__global__ void split_heads_kernel(const float* x, float* out, size_t total,
+template <typename E>
+__global__ void split_heads_kernel(const E* x, E* out, size_t total,
                                    size_t T, size_t H, size_t hd) {
     ELEMENT_INDEX(total)
     const size_t d = i % hd;
@@ -206,7 +208,8 @@ __global__ void split_heads_kernel(const float* x, float* out, size_t total,
 }
 
 // [B, H, T, hd] -> [B, T, H*hd]
-__global__ void merge_heads_kernel(const float* x, float* out, size_t total,
+template <typename E>
+__global__ void merge_heads_kernel(const E* x, E* out, size_t total,
                                    size_t T, size_t H, size_t hd) {
     ELEMENT_INDEX(total)
     const size_t d = i % hd;
@@ -216,35 +219,33 @@ __global__ void merge_heads_kernel(const float* x, float* out, size_t total,
     out[i] = x[((b * H + h) * T + t) * hd + d];
 }
 
-// Naive version (reads are strided). Fine for now; a shared-memory tiled transpose is
-// the standard optimization if profiling ever shows it matters.
+// maybe change to a shared-memory tiled transpose later??? 
 __global__ void transpose_kernel(const float* x, float* out, size_t rows, size_t cols) {
     ELEMENT_INDEX(rows * cols)
-    // Output is [cols, rows]; i = out_row * rows + out_col, and out[r][c] = x[c][r].
     const size_t out_row = i / rows;
     const size_t out_col = i % rows;
     out[i] = x[out_col * cols + out_row];
 }
 
-// [batch, rows, cols] -> [batch, cols, rows]. Used for q @ k^T style products in attention.
+// [batch, rows, cols] -> [batch, cols, rows] used for attention score calculation
 __global__ void transpose_batched_kernel(const float* x, float* out, size_t total,
                                          size_t rows, size_t cols) {
     ELEMENT_INDEX(total)
     const size_t matrix = i / (rows * cols);
     const size_t within = i % (rows * cols);
-    const size_t out_row = within / rows;     // output matrix is [cols, rows]
+    const size_t out_row = within / rows;
     const size_t out_col = within % rows;
     out[i] = x[matrix * rows * cols + out_col * cols + out_row];
 }
 
 void split_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd) {
     const size_t total = B * T * H * hd;
-    LAUNCH(split_heads_kernel, total, x, out, total, T, H, hd);
+    LAUNCH(split_heads_kernel<float>, total, x, out, total, T, H, hd);
 }
 
 void merge_heads(const float* x, float* out, size_t B, size_t T, size_t H, size_t hd) {
     const size_t total = B * T * H * hd;
-    LAUNCH(merge_heads_kernel, total, x, out, total, T, H, hd);
+    LAUNCH(merge_heads_kernel<float>, total, x, out, total, T, H, hd);
 }
 
 void transpose(const float* x, float* out, size_t rows, size_t cols) {
@@ -257,10 +258,9 @@ void transpose_batched(const float* x, float* out, size_t batch, size_t rows, si
     LAUNCH(transpose_batched_kernel, total, x, out, total, rows, cols);
 }
 
-// One thread per (group, position, pair). Same math as the CPU table version:
-//   angle = pos * theta^(-2i / head_dim);  (x1, x2) -> (x1 c - x2 s, x1 s + x2 c)
-// Do NOT compile with --use_fast_math: __sinf/__cosf lose accuracy at large angles.
-__global__ void rope_kernel(const float* x, float* out, size_t total_pairs,
+//   angle = pos * theta^(-2i / head_dim);  (x1, x2) -> (x1 cos - x2 sin, x1 sin + x2 cos)
+template <typename E>
+__global__ void rope_kernel(const E* x, E* out, size_t total_pairs,
                             size_t T, size_t head_dim, float theta, float sign) {
     ELEMENT_INDEX(total_pairs)
     const size_t pairs = head_dim / 2;
@@ -272,17 +272,72 @@ __global__ void rope_kernel(const float* x, float* out, size_t total_pairs,
     const float c = cosf(angle);
     const float s = sign * sinf(angle);
 
-    const size_t base = i * 2;   // pair i starts at element 2*i of the flattened tensor
-    const float x1 = x[base];
-    const float x2 = x[base + 1];
-    out[base]     = x1 * c - x2 * s;
-    out[base + 1] = x1 * s + x2 * c;
+    const size_t base = i * 2;
+    const float x1 = ld(x, base);
+    const float x2 = ld(x, base + 1);
+    st(out, base,     x1 * c - x2 * s);
+    st(out, base + 1, x1 * s + x2 * c);
 }
 
 void rope(const float* x, float* out, size_t groups, size_t T, size_t head_dim,
           float theta, float sign) {
     const size_t total_pairs = groups * T * (head_dim / 2);
-    LAUNCH(rope_kernel, total_pairs, x, out, total_pairs, T, head_dim, theta, sign);
+    LAUNCH(rope_kernel<float>, total_pairs, x, out, total_pairs, T, head_dim, theta, sign);
+}
+
+// =====================================================================================
+// bf16 variants (stage 3). Same kernels instantiated for __nv_bfloat16; math stays fp32.
+// =====================================================================================
+
+template <typename EA, typename EB, typename EO>
+__global__ void add_mixed_kernel(const EA* a, const EB* b, EO* out, size_t n) {
+    ELEMENT_INDEX(n)
+    st(out, i, ld(a, i) + ld(b, i));
+}
+
+template <typename ES>
+__global__ void accumulate_from_kernel(float* dst, const ES* src, size_t n) {
+    ELEMENT_INDEX(n)
+    dst[i] += ld(src, i);
+}
+
+void add(const uint16_t* a, const uint16_t* b, uint16_t* out, size_t n) {
+    if (n == 0) return;
+    add_mixed_kernel<__nv_bfloat16, __nv_bfloat16, __nv_bfloat16><<<blocks_for(n), kBlockSize>>>(
+        as_bf16(a), as_bf16(b), as_bf16(out), n);
+    CUDA_LAUNCH_CHECK();
+}
+void add(const float* a, const uint16_t* b, float* out, size_t n) {
+    if (n == 0) return;
+    add_mixed_kernel<float, __nv_bfloat16, float><<<blocks_for(n), kBlockSize>>>(a, as_bf16(b), out, n);
+    CUDA_LAUNCH_CHECK();
+}
+void accumulate(float* dst, const uint16_t* src, size_t n) {
+    if (n == 0) return;
+    accumulate_from_kernel<__nv_bfloat16><<<blocks_for(n), kBlockSize>>>(dst, as_bf16(src), n);
+    CUDA_LAUNCH_CHECK();
+}
+void multiply(const uint16_t* a, const uint16_t* b, uint16_t* out, size_t n) {
+    LAUNCH(multiply_kernel<__nv_bfloat16>, n, as_bf16(a), as_bf16(b), as_bf16(out), n);
+}
+void silu(const uint16_t* x, uint16_t* out, size_t n) {
+    LAUNCH(silu_kernel<__nv_bfloat16>, n, as_bf16(x), as_bf16(out), n);
+}
+void silu_backward(const uint16_t* x, const uint16_t* g, uint16_t* out, size_t n) {
+    LAUNCH(silu_backward_kernel<__nv_bfloat16>, n, as_bf16(x), as_bf16(g), as_bf16(out), n);
+}
+void split_heads(const uint16_t* x, uint16_t* out, size_t B, size_t T, size_t H, size_t hd) {
+    const size_t total = B * T * H * hd;
+    LAUNCH(split_heads_kernel<__nv_bfloat16>, total, as_bf16(x), as_bf16(out), total, T, H, hd);
+}
+void merge_heads(const uint16_t* x, uint16_t* out, size_t B, size_t T, size_t H, size_t hd) {
+    const size_t total = B * T * H * hd;
+    LAUNCH(merge_heads_kernel<__nv_bfloat16>, total, as_bf16(x), as_bf16(out), total, T, H, hd);
+}
+void rope(const uint16_t* x, uint16_t* out, size_t groups, size_t T, size_t head_dim,
+          float theta, float sign) {
+    const size_t total_pairs = groups * T * (head_dim / 2);
+    LAUNCH(rope_kernel<__nv_bfloat16>, total_pairs, as_bf16(x), as_bf16(out), total_pairs, T, head_dim, theta, sign);
 }
 
 } // namespace cuda

@@ -2,9 +2,18 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 #ifdef USE_CUDA
 #include "cuda/cuda_ops.h"
+#endif
+
+#ifdef USE_CUDA
+namespace {
+void require_same_dtype(const Tensor& a, const Tensor& b, const char* op) {
+    if (a.dtype() != b.dtype()) throw std::invalid_argument(std::string(op) + ": dtype mismatch");
+}
+}
 #endif
 
 Tensor ops::add(const Tensor& a, const Tensor& b) {
@@ -15,6 +24,21 @@ Tensor ops::add(const Tensor& a, const Tensor& b) {
     #ifdef USE_CUDA
     if (a.is_cuda() || b.is_cuda()) {
         require_same_device(a, b, "add");
+        if (a.is_bf16() && b.is_bf16()) {                     // bf16 + bf16 -> bf16
+            Tensor out(a.shape(), Device::CUDA, DType::BF16);
+            cuda::add(a.bf16_data(), b.bf16_data(), out.bf16_data(), a.numel());
+            return out;
+        }
+        if (!a.is_bf16() && b.is_bf16()) {                    // fp32 stream + bf16 branch -> fp32
+            Tensor out(a.shape(), Device::CUDA);
+            cuda::add(a.data(), b.bf16_data(), out.data(), a.numel());
+            return out;
+        }
+        if (a.is_bf16() && !b.is_bf16()) {                    // commutative
+            Tensor out(a.shape(), Device::CUDA);
+            cuda::add(b.data(), a.bf16_data(), out.data(), a.numel());
+            return out;
+        }
         Tensor out(a.shape(), Device::CUDA);
         cuda::add(a.data(), b.data(), out.data(), a.numel());
         return out;
@@ -38,6 +62,12 @@ Tensor ops::multiply(const Tensor& a, const Tensor& b) {
     #ifdef USE_CUDA
     if (a.is_cuda() || b.is_cuda()) {
         require_same_device(a, b, "multiply");
+        require_same_dtype(a, b, "multiply");
+        if (a.is_bf16()) {
+            Tensor out(a.shape(), Device::CUDA, DType::BF16);
+            cuda::multiply(a.bf16_data(), b.bf16_data(), out.bf16_data(), a.numel());
+            return out;
+        }
         Tensor out(a.shape(), Device::CUDA);
         cuda::multiply(a.data(), b.data(), out.data(), a.numel());
         return out;
@@ -77,6 +107,11 @@ Tensor ops::silu(const Tensor& x) {
 
     #ifdef USE_CUDA
     if (x.is_cuda()) {
+        if (x.is_bf16()) {
+            Tensor out(x.shape(), Device::CUDA, DType::BF16);
+            cuda::silu(x.bf16_data(), out.bf16_data(), x.numel());
+            return out;
+        }
         Tensor out(x.shape(), Device::CUDA);
         cuda::silu(x.data(), out.data(), x.numel());
         return out;
@@ -102,6 +137,12 @@ Tensor ops::silu_backward(const Tensor& input, const Tensor& grad_output) {
     #ifdef USE_CUDA
         if (input.is_cuda()) {
         require_same_device(input, grad_output, "silu_backward");
+        require_same_dtype(input, grad_output, "silu_backward");
+        if (input.is_bf16()) {
+            Tensor out(input.shape(), Device::CUDA, DType::BF16);
+            cuda::silu_backward(input.bf16_data(), grad_output.bf16_data(), out.bf16_data(), input.numel());
+            return out;
+        }
         Tensor out(input.shape(), Device::CUDA);
         cuda::silu_backward(input.data(), grad_output.data(), out.data(), input.numel());
         return out;
@@ -119,8 +160,6 @@ Tensor ops::silu_backward(const Tensor& input, const Tensor& grad_output) {
 }
 
 Tensor ops::transpose(const Tensor& x) {
-
-    
 
     auto shape = x.shape();
 

@@ -7,17 +7,21 @@
 #include "cuda/cuda_ops.h"
 #endif
 
-Tensor ops::rmsnorm(const Tensor& x, const Tensor& weight, float eps) {
+Tensor ops::rmsnorm(const Tensor& x, const Tensor& weight, float eps, DType out_dtype) {
 
     #ifdef USE_CUDA
         if (x.is_cuda() || weight.is_cuda()) {
             require_same_device(x, weight, "rmsnorm");
             const size_t D = weight.numel();
-            Tensor out(x.shape(), Device::CUDA);
-            cuda::rmsnorm(x.data(), weight.data(), out.data(), x.numel() / D, D, eps);
+            Tensor out(x.shape(), Device::CUDA, out_dtype);
+            if (out_dtype == DType::BF16)
+                cuda::rmsnorm(x.data(), weight.data(), out.bf16_data(), x.numel() / D, D, eps);
+            else
+                cuda::rmsnorm(x.data(), weight.data(), out.data(), x.numel() / D, D, eps);
             return out;
         }
     #endif
+    if (out_dtype != DType::F32) throw std::invalid_argument("rmsnorm: bf16 output is CUDA-only");
 
     size_t hidden_size = x.dim(x.ndim() - 1);
 
@@ -68,9 +72,13 @@ Tensor ops::rmsnorm_backward(const Tensor& x, const Tensor& weight,
     #ifdef USE_CUDA
         if (x.is_cuda()) {
             const size_t D = weight.numel();
-            Tensor dx(x.shape(), Device::CUDA);
-            cuda::rmsnorm_backward(x.data(), weight.data(), grad_output.data(), dx.data(),
-                                weight_grad.data(), x.numel() / D, D, eps);
+            Tensor dx(x.shape(), Device::CUDA);   // always fp32
+            if (grad_output.is_bf16())
+                cuda::rmsnorm_backward(x.data(), weight.data(), grad_output.bf16_data(), dx.data(),
+                                       weight_grad.data(), x.numel() / D, D, eps);
+            else
+                cuda::rmsnorm_backward(x.data(), weight.data(), grad_output.data(), dx.data(),
+                                       weight_grad.data(), x.numel() / D, D, eps);
             return dx;
         }
     #endif
