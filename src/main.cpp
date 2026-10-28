@@ -2,12 +2,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include "config.h"
 #include <chrono>
+#include <filesystem>
+
+#include "config.h"
 
 #include "data/dataloader.h"
 #include "data/dataset.h"
 #include "data/parquet_reader.h"
+#include "tokenizer.h"
+#include "data/mix.h"
 
 #include "model.h"
 #include "optim/adamw.h"
@@ -15,6 +19,8 @@
 #include "scheduler.h"
 #include "inference.h"
 #include "checkpoint.h"
+
+#include "data/sft.h"
 
 #ifdef USE_CUDA
 #include "cuda/cuda_ops.h"
@@ -26,6 +32,36 @@
 #include <windows.h>
 #endif
 
+#define TRAIN
+
+static void runChat(Tokenizer& tokenizer, const ModelConfig& modelConfig) {
+    const std::string checkpoint = "checkpoints/sft_model.bin";   // the SFT checkpoint to use
+
+    #ifdef USE_CUDA
+    const Device device = Device::CUDA;
+    #else
+    const Device device = Device::CPU;
+    #endif
+
+    Model model(modelConfig);
+    model.to(device);
+    #ifdef USE_CUDA
+    model.enable_bf16(true);
+    #endif
+    load_checkpoint_weights(checkpoint, model);
+    model.refresh_bf16_weights();
+
+    Inference inference(model, tokenizer);
+    SamplingOptions options;
+    options.temperature = 0.7f;
+    std::string line;
+    std::cout << "> " << std::flush;
+    while (std::getline(std::cin, line)) {
+        if (!line.empty()) inference.generateChat(line, 150, options);
+        std::cout << "> " << std::flush;
+    }
+}
+
 int main() {
 
     #ifdef _WIN32
@@ -33,6 +69,7 @@ int main() {
     SetConsoleOutputCP(CP_UTF8); // set console output to UTF-8
     #endif
 
+    
     ModelConfig modelConfig;
     TrainingConfig trainingConfig;
 
@@ -41,19 +78,40 @@ int main() {
     Tokenizer tokenizer;
     tokenizer.load("tokenizer/tokenizer.bin");
 
+    runChat(tokenizer, modelConfig); return 0;
+
     Dataset dataset({
-        "tokenized/train-00000-of-00012-6fbcb5acda05b3c0.bin",
-        "tokenized/train-00001-of-00012-2bb9d088068a84c9.bin",
-        "tokenized/train-00002-of-00012-efb6c8de04272068.bin",
-        "tokenized/train-00003-of-00012-47006e5a888a9324.bin",
-        "tokenized/train-00004-of-00012-a6a94a0207e8e96c.bin",
-        "tokenized/train-00005-of-00012-d255c96cd87a0aa7.bin",
-        "tokenized/train-00006-of-00012-89040916c30140e6.bin",
-        "tokenized/train-00007-of-00012-239b43e016d4ac92.bin",
-        "tokenized/train-00008-of-00012-3273ba93936ad8ef.bin",
-        "tokenized/train-00009-of-00012-0b640f47936d940a.bin",
-        "tokenized/train-00010-of-00012-d266658ccbfa0537.bin",
-        "tokenized/train-00011-of-00012-aec474909333c631.bin"
+        "tokenized/mix/mixed-00000.bin",
+        "tokenized/mix/mixed-00001.bin",
+        "tokenized/mix/mixed-00002.bin",
+        "tokenized/mix/mixed-00003.bin",
+        "tokenized/mix/mixed-00004.bin",
+        "tokenized/mix/mixed-00005.bin",
+        "tokenized/mix/mixed-00006.bin",
+        "tokenized/mix/mixed-00007.bin",
+        "tokenized/mix/mixed-00008.bin",
+        "tokenized/mix/mixed-00009.bin",
+        "tokenized/mix/mixed-00010.bin",
+        "tokenized/mix/mixed-00011.bin",
+        "tokenized/mix/mixed-00012.bin",
+        "tokenized/mix/mixed-00013.bin",
+        "tokenized/mix/mixed-00014.bin",
+        "tokenized/mix/mixed-00015.bin",
+        "tokenized/mix/mixed-00016.bin",
+        "tokenized/mix/mixed-00017.bin",
+        "tokenized/mix/mixed-00018.bin",
+        "tokenized/mix/mixed-00019.bin",
+        "tokenized/mix/mixed-00020.bin",
+        "tokenized/mix/mixed-00021.bin",
+        "tokenized/mix/mixed-00022.bin",
+        "tokenized/mix/mixed-00023.bin",
+        "tokenized/mix/mixed-00024.bin",
+        "tokenized/mix/mixed-00025.bin",
+        "tokenized/mix/mixed-00026.bin",
+        "tokenized/mix/mixed-00027.bin",
+        "tokenized/mix/mixed-00028.bin",
+        "tokenized/mix/mixed-00029.bin",
+        "tokenized/mix/mixed-00030.bin"
     });
 
     DataLoader dataloader(dataset, trainingConfig.batch_size, modelConfig.context_length);
@@ -81,28 +139,15 @@ int main() {
 
     Scheduler scheduler(
         trainingConfig.learning_rate,   // max lr
-        0.05f,                           // 5% linear warmup
+        0.03f,                          // 3% linear warmup
         total_steps                     // total steps (training tokens / (context length * batch size))
     );
 
     // checkpoint training
-    // TrainState state = load_checkpoint("checkpoints/checkpoint_step_20000.bin", model, optimizer);
-    // model.refresh_bf16_weights();
-    // start_step = state.step;
-    // dataloader.setPosition(state.data_position);
-
-    Inference inference(model, tokenizer);
-
-    // inference.generate("Paris is the capital of", 20);
-    // inference.generate("The capital of Japan is", 20);
-    // inference.generate("The largest planet in our solar system is", 20);
-    // inference.generate("Water freezes at", 20);
-    // inference.generate("The sun is a", 20);
-    // inference.generate("The Earth revolves around", 20);
-    // inference.generate("William Shakespeare was", 20);
-    // inference.generate("The Great Wall of China", 20);
-
-    return 0;
+    TrainState state = load_checkpoint("checkpoints_2/checkpoint_step_59508.bin", model, optimizer);
+    model.refresh_bf16_weights();
+    start_step = state.step;
+    dataloader.setPosition(state.data_position);
 
     const size_t accum = trainingConfig.grad_accum_steps;
 
@@ -132,8 +177,8 @@ int main() {
             std::printf("  step %4zu/%zu  loss %.4f  grad_norm %.4f  lr %.6f\n", step, total_steps, loss, grad_norm, lr);
         }
         if (step % 2000 == 0 || step == total_steps - 1) {
-            std::string checkpoint_path = "checkpoints/checkpoint_step_" + std::to_string(step) + ".bin";
-            save_checkpoint(checkpoint_path, model, optimizer, TrainState{step, dataloader.position()});
+            std::string checkpoint_path = "checkpoints_2/checkpoint_step_" + std::to_string(step) + ".bin";
+            save_checkpoint(checkpoint_path, model, optimizer, TrainState{step + 1, dataloader.position()});
         }
     }
 

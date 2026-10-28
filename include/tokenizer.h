@@ -9,8 +9,6 @@
 #include <utility>
 #include <vector>
 
-#define NUM_MERGE 10
-
 using Token = uint32_t;
 using WordID = uint32_t;
 

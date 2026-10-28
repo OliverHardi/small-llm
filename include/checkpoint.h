@@ -14,3 +14,5 @@ struct TrainState {
 void save_checkpoint(const std::string& path, Model& model, const AdamW& optimizer, const TrainState& state);
 
 TrainState load_checkpoint(const std::string& path, Model& model, AdamW& optimizer);
+
+TrainState load_checkpoint_weights(const std::string& path, Model& model);

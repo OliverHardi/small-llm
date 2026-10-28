@@ -113,11 +113,11 @@ void softmax(const float* x, float* out, size_t rows, size_t cols, bool causal);
 void softmax_backward(const float* probs, const float* grad_out, float* dx, size_t rows, size_t cols);
  
 // Mean cross-entropy. targets are float class ids. Returns the loss on the host (SYNCHRONIZES).
-float cross_entropy(const float* logits, const float* targets, size_t rows, size_t vocab);
+float cross_entropy(const float* logits, const float* targets, size_t rows, size_t vocab, size_t num_valid = 0);
 void  cross_entropy_backward(const float* logits, const float* targets, float* grad,
-                             size_t rows, size_t vocab);
+                             size_t rows, size_t vocab, size_t num_valid = 0);
 void  cross_entropy_backward(const float* logits, const float* targets, uint16_t* grad,    // grad written as bf16
-                             size_t rows, size_t vocab);
+                             size_t rows, size_t vocab, size_t num_valid = 0);
  
 // Sum of squares of n floats, accumulated in double. Returns on the host (SYNCHRONIZES).
 float sum_squares(const float* x, size_t n);

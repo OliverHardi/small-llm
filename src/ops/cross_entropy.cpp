@@ -7,8 +7,11 @@
 #include "cuda/cuda_ops.h"
 #endif
 
-// logits must be fp32
-float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
+// logits must be fp32 (the lm-head matmul is asked for DType::F32 output).
+// A target < 0 means "ignore this position" (SFT loss mask): no loss, no gradient.
+// The loss is the mean over the positions that count. num_valid is how many there are
+// (0 = all positions, the pretraining case).
+float ops::cross_entropy(const Tensor& logits, const Tensor& targets, size_t num_valid) {
 
     size_t vocab_size = logits.dim(logits.ndim() - 1);
     size_t num_predictions = logits.numel() / vocab_size;
@@ -17,13 +20,15 @@ float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
         if (logits.is_cuda()) {
             require_same_device(logits, targets, "cross_entropy");
             const size_t V = logits.dim(logits.ndim() - 1);
-            return cuda::cross_entropy(logits.data(), targets.data(), logits.numel() / V, V);
+            return cuda::cross_entropy(logits.data(), targets.data(), logits.numel() / V, V, num_valid);
         }
     #endif
 
     double total_loss = 0.0f;
 
     for (size_t i = 0; i < num_predictions; ++i) {
+        if (targets[i] < 0.0f) continue;   // ignored position
+
         size_t base = i * vocab_size;
 
         float max_logit = logits[base];
@@ -45,13 +50,13 @@ float ops::cross_entropy(const Tensor& logits, const Tensor& targets) {
         total_loss += loss;
     }
 
-    return static_cast<float>(total_loss / static_cast<double_t>(num_predictions));
+    return static_cast<float>(total_loss / static_cast<double>(num_valid ? num_valid : num_predictions));
 }
 
-Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets, DType grad_dtype) {
+Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets, DType grad_dtype, size_t num_valid) {
     const size_t vocab_size = logits.dim(logits.ndim() - 1);
     const size_t num_predictions = logits.numel() / vocab_size;
-    const float inv_n = 1.0f / static_cast<float>(num_predictions);
+    const float inv_n = 1.0f / static_cast<float>(num_valid ? num_valid : num_predictions);
 
     #ifdef USE_CUDA
         if (logits.is_cuda()) {
@@ -60,10 +65,10 @@ Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets, 
             Tensor grad(logits.shape(), Device::CUDA, grad_dtype);
             if (grad.is_bf16()) {
                 cuda::cross_entropy_backward(logits.data(), targets.data(), grad.bf16_data(),
-                                             logits.numel() / V, V);
+                                             logits.numel() / V, V, num_valid);
             } else {
                 cuda::cross_entropy_backward(logits.data(), targets.data(), grad.data(),
-                                             logits.numel() / V, V);
+                                             logits.numel() / V, V, num_valid);
             }
             return grad;
         }
@@ -75,6 +80,11 @@ Tensor ops::cross_entropy_backward(const Tensor& logits, const Tensor& targets, 
 
     for (size_t i = 0; i < num_predictions; ++i) {
         const size_t base = i * vocab_size;
+
+        if (targets[i] < 0.0f) {   // ignored position
+            for (size_t j = 0; j < vocab_size; ++j) grad[base + j] = 0.0f;
+            continue;
+        }
 
         float max_logit = logits[base];
         for (size_t j = 1; j < vocab_size; ++j) {

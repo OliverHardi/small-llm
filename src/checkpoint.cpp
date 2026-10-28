@@ -54,7 +54,7 @@ void save_checkpoint(const std::string& path, Model& model, const AdamW& optimiz
     std::filesystem::rename(tmp_path, path);   // atomic replace
 }
  
-TrainState load_checkpoint(const std::string& path, Model& model, AdamW& optimizer) {
+static TrainState load_checkpoint_impl(const std::string& path, Model& model, AdamW* optimizer) {
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("load_checkpoint: cannot open " + path);
  
@@ -86,8 +86,17 @@ TrainState load_checkpoint(const std::string& path, Model& model, AdamW& optimiz
         *p.value = host.to(p.value->device());
     }
 
-    optimizer.load(in);
+    if (optimizer) optimizer->load(in);
 
     if (!in) throw std::runtime_error("load_checkpoint: file truncated or corrupt");
     return state;
+}
+
+TrainState load_checkpoint(const std::string& path, Model& model, AdamW& optimizer) {
+    return load_checkpoint_impl(path, model, &optimizer);
+}
+
+// SFT: weights only. The optimizer state and step stored in the file are ignored.
+TrainState load_checkpoint_weights(const std::string& path, Model& model) {
+    return load_checkpoint_impl(path, model, nullptr);
 }

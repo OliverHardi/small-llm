@@ -31,7 +31,7 @@ void Tokenizer::forEachMatch(
         NULL
     );
  
-    if (!re) return;
+    if (!re) { return; }
  
     int jit_rc = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE);
     bool use_jit = (jit_rc == 0);
@@ -47,7 +47,9 @@ void Tokenizer::forEachMatch(
             ? pcre2_jit_match(re, subject, subject_length, start_offset, 0, match_data, NULL)
             : pcre2_match(re, subject, subject_length, start_offset, 0, match_data, NULL);
  
-        if (rc < 0) break;
+        if (rc < 0) {
+            break;
+        }
  
         PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(match_data);
         PCRE2_SIZE match_start = ovector[0];
@@ -239,6 +241,13 @@ std::string Tokenizer::decode(const std::vector<Token>& tokens) const {
 
         if (t == getEosToken()) {
             result += ("\n<EOS>\n");
+            continue;
+        }
+
+        if (t > getEosToken()) {   // reserved tokens
+            static const char* names[] = {"<|user|>", "<|assistant|>", "<|end|>", "<|reserved4|>", "<|reserved5|>"};
+            const size_t k = t - getEosToken() - 1;
+            result += k < 5 ? names[k] : "<|?|>";
             continue;
         }
 

@@ -156,6 +156,10 @@ __global__ void softmax_backward_kernel(const float* p, const float* g, float* d
 // per row loss: log-sum-exp(logits) - logits[target].
 __global__ void cross_entropy_kernel(const float* logits, const float* targets,
                                      float* row_loss, size_t vocab) {
+    if (targets[blockIdx.x] < 0.0f) {   // ignored position (SFT mask): no loss
+        if (threadIdx.x == 0) row_loss[blockIdx.x] = 0.0f;
+        return;
+    }
     const size_t base = blockIdx.x * vocab;
 
     float max_logit = -FLT_MAX;
@@ -172,11 +176,11 @@ __global__ void cross_entropy_kernel(const float* logits, const float* targets,
     }
 }
 
-__global__ void mean_kernel(const float* values, size_t n, float* out) {
+__global__ void mean_kernel(const float* values, size_t n, size_t denominator, float* out) {
     double total = 0.0;
     for (size_t i = threadIdx.x; i < n; i += blockDim.x) total += values[i];
     total = block_sum(total);
-    if (threadIdx.x == 0) *out = static_cast<float>(total / static_cast<double>(n));
+    if (threadIdx.x == 0) *out = static_cast<float>(total / static_cast<double>(denominator));
 }
 
 // grad = (softmax(logits) - onehot(target)) / N
@@ -184,7 +188,12 @@ template <typename EG>
 __global__ void cross_entropy_backward_kernel(const float* logits, const float* targets,
                                               EG* grad, size_t vocab, float inv_n) {
     const size_t base = blockIdx.x * vocab;
-    const size_t target = static_cast<size_t>(targets[blockIdx.x]);
+    const float target_value = targets[blockIdx.x];
+    if (target_value < 0.0f) {   // ignored position: zero gradient
+        for (size_t j = threadIdx.x; j < vocab; j += blockDim.x) st(grad, base + j, 0.0f);
+        return;
+    }
+    const size_t target = static_cast<size_t>(target_value);
 
     float max_logit = -FLT_MAX;
     for (size_t j = threadIdx.x; j < vocab; j += blockDim.x) max_logit = fmaxf(max_logit, logits[base + j]);
@@ -268,7 +277,7 @@ void softmax_backward(const float* probs, const float* grad_out, float* dx, size
     ROW_LAUNCH(softmax_backward_kernel, rows, probs, grad_out, dx, cols);
 }
 
-float cross_entropy(const float* logits, const float* targets, size_t rows, size_t vocab) {
+float cross_entropy(const float* logits, const float* targets, size_t rows, size_t vocab, size_t num_valid) {
     static float* row_loss = nullptr;     static size_t row_loss_cap = 0;
     static float* result = nullptr;       static size_t result_cap = 0;
 
@@ -276,7 +285,7 @@ float cross_entropy(const float* logits, const float* targets, size_t rows, size
     float* out = scratch<float>(1, result, result_cap);
 
     ROW_LAUNCH(cross_entropy_kernel, rows, logits, targets, losses, vocab);
-    mean_kernel<<<1, kBlockSize>>>(losses, rows, out);
+    mean_kernel<<<1, kBlockSize>>>(losses, rows, num_valid ? num_valid : rows, out);
     CUDA_LAUNCH_CHECK();
 
     float host = 0.0f;
@@ -285,8 +294,8 @@ float cross_entropy(const float* logits, const float* targets, size_t rows, size
 }
 
 void cross_entropy_backward(const float* logits, const float* targets, float* grad,
-                            size_t rows, size_t vocab) {
-    const float inv_n = 1.0f / static_cast<float>(rows);
+                            size_t rows, size_t vocab, size_t num_valid) {
+    const float inv_n = 1.0f / static_cast<float>(num_valid ? num_valid : rows);
     ROW_LAUNCH(cross_entropy_backward_kernel<float>, rows, logits, targets, grad, vocab, inv_n);
 }
 
@@ -302,8 +311,8 @@ void rmsnorm_backward(const float* x, const float* w, const uint16_t* grad_out,
 }
 
 void cross_entropy_backward(const float* logits, const float* targets, uint16_t* grad,
-                            size_t rows, size_t vocab) {
-    const float inv_n = 1.0f / static_cast<float>(rows);
+                            size_t rows, size_t vocab, size_t num_valid) {
+    const float inv_n = 1.0f / static_cast<float>(num_valid ? num_valid : rows);
     ROW_LAUNCH(cross_entropy_backward_kernel<__nv_bfloat16>, rows, logits, targets, as_bf16(grad), vocab, inv_n);
 }
 

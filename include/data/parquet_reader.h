@@ -120,11 +120,10 @@ void tokenizeParquet(const std::string& path, Tokenizer& tokenizer) {
 
         auto batch = maybe_batch.ValueOrDie();
 
-        // Assuming column 0 contains the text.
-        auto array =
-            std::static_pointer_cast<arrow::StringArray>(
-                batch->column(0)
-            );
+        // Assuming column "text" contains the text
+        auto text_column = batch->GetColumnByName("text");
+        if (!text_column) throw std::runtime_error("no 'text' column in " + path);
+        auto array = std::static_pointer_cast<arrow::StringArray>(text_column);
 
         // --------------------------------------------------------
         // Process every text row in this batch
