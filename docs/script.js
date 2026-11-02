@@ -128,30 +128,41 @@ const addMessage = (cls, text) => {
   return div
 }
 
-async function download (url, label) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`)
-  const total = +response.headers.get('content-length') || 0
-  const reader = response.body.getReader(),
-    chunks = []
-  let received = 0
+async function download(url, label) {
+  let cache = null;
+  try { cache = await caches.open("model-v1"); } catch {}         // not available in some private windows
+  if (cache) {
+    const hit = await cache.match(url);
+    if (hit) {
+      setStatus(`Loading ${label} from the browser cache…`);
+      return new Uint8Array(await hit.arrayBuffer());
+    }
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  const total = +response.headers.get("content-length") || 0;
+  const reader = response.body.getReader(), chunks = [];
+  let received = 0;
   for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-    received += value.length
-    if (total)
-      setStatus(
-        `Downloading ${label}: ${Math.round((100 * received) / total)}%`
-      )
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); received += value.length;
+    if (total) setStatus(`Downloading ${label}: ${Math.round(100 * received / total)}%`);
   }
-  const bytes = new Uint8Array(received)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.length
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+
+  if (cache) {
+    try {
+      await cache.put(url, new Response(bytes));                  // stored under the URL
+      navigator.storage?.persist?.();                             // ask the browser not to evict it under disk pressure
+    } catch (error) {
+      console.warn("could not cache the model:", error);          // quota or private mode: it still loads, just not cached
+    }
   }
-  return bytes
+  return bytes;
 }
 
 let tokenizer, session
