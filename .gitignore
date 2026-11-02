@@ -21,8 +21,8 @@
 !tokenizer
 !tokenizer/**
 
-!web_port
-!web_port/**
+!docs
+!docs/**
 *.onnx
 
 # unignore project stuff
