@@ -35,7 +35,7 @@
 #define TRAIN
 
 static void runChat(Tokenizer& tokenizer, const ModelConfig& modelConfig) {
-    const std::string checkpoint = "checkpoints/sft_model.bin";   // the SFT checkpoint to use
+    const std::string checkpoint = "checkpoints/sft_2_model.bin";   // the SFT checkpoint to use
 
     #ifdef USE_CUDA
     const Device device = Device::CUDA;

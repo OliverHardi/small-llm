@@ -21,6 +21,10 @@
 !tokenizer
 !tokenizer/**
 
+!web_port
+!web_port/**
+*.onnx
+
 # unignore project stuff
 
 !CMakeLists.txt
