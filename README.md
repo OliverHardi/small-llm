@@ -52,8 +52,8 @@ Pretraining loss and benchmarks for the base (pretrained) model.
 
 | Model | Params | Tokens | HellaSwag | ARC-Easy  | OpenBookQA |
 |---|---|---|---|---|---|
-| small-llm (this repo) | 100M | 5B | 30.37 | 45.37 | 29.0 |
-| EleutherAI/pythia-160m | 160M | 300B | 30.64 | 43.90 | 27.40 |
+| **small-llm (this repo)** | 100M | 5B | 30.37 | **45.37** | **29.0** |
+| EleutherAI/pythia-160m | 160M | 300B | **30.64** | 43.90 | 27.40 |
 | gpt2 | 124M | 100B | 29.56 | 43.90 | 26.6 |
 
 Random guessing is 25% on all four. Differences of a point or less are within noise on the smaller tasks.
