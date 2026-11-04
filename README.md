@@ -12,7 +12,7 @@ bf16 training, instruction tuning, and a chat interface. The trained model also 
 | Parameters | 100.3M |
 | Layers | 16 |
 | Model width | 640 |
-| Attention | 10 heads (head dim 64), causal, rotary position embeddings (θ = 10,000) |
+| Attention | 10 heads (head dim 64), causal, RoPE |
 | Feed-forward | SwiGLU, hidden size 1728 |
 | Normalization | RMSNorm (pre-norm) |
 | Embeddings | tied input/output, vocabulary 32,768 |
