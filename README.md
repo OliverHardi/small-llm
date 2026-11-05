@@ -68,9 +68,9 @@ This is a 100M-parameter model trained on about 5B tokens, so it is fluent but n
 
 - It hallucinates facts a lot:
 
-      A whale is a type of fish that has been found throughout the ocean. They are known for their powerful stomachs
-      and large numbers of jellyfish, which they eat when they feed. Some whales have even eaten seals before but never
-      became extinct.
+      A whale is a type of fish that has been found throughout the ocean. They are known
+      for their powerful stomachs and large numbers of jellyfish, which they eat when they
+      feed. Some whales have even eaten seals before but never became extinct.
   
 - It can repeat itself. A repetition penalty (about 1.1–1.2) helps.
 - Open-ended creative requests (poems, stories) lose the thread after a few lines.
