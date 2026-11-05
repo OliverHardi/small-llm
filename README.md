@@ -18,6 +18,9 @@ bf16 training, instruction tuning, and a chat interface. The trained model also 
 | Embeddings | tied input/output, vocabulary 32,768 |
 | Context length | 2048 tokens |
 
+## Scope
+
+small-llm is deliberately a general-prose model: it is trained on web text, educational text and stories, with no code and no math corpora, and the instruction-tuning data was filtered to remove code, math and science-heavy dialogues. At 100M parameters a model can’t be good at everything, so concentrating capacity on ordinary English text gave much better results than my first attempt, which was trained on the broader MiniPile dataset. It is not meant for code, math or technical questions.
 
 ## What is implemented from scratch
 
@@ -56,7 +59,8 @@ Pretraining loss and benchmarks for the base (pretrained) model.
 | EleutherAI/pythia-160m | 160M | 300B | **30.64** | 43.90 | 27.40 |
 | gpt2 | 124M | 100B | 29.56 | 43.90 | 26.6 |
 
-Random guessing is 25% on all four. Differences of a point or less are within noise on the smaller tasks.
+On three zero-shot benchmarks, small-llm performs on par with GPT-2 small (124M) and Pythia-160m, despite having fewer parameters and far less training data. It is nominally ahead on ARC-Easy and OpenBookQA, and on HellaSwag it sits between GPT-2 and Pythia. The standard errors are about ±0.5 on HellaSwag, ±1 on ARC-Easy and ±2 on OpenBookQA, so these gaps are within noise and I don’t claim a ranking. A plausible contributor to the ARC-Easy result is the training mix’s heavy share of FineWeb-Edu, which tends to help science-question tasks, but I haven’t tested that. In absolute terms the scores are modest (HellaSwag is about 5 points above the 25% chance level), which is typical for a model of this size. ARC-Challenge is omitted because every model scores near chance on it. The model is fluent but unreliable: it states wrong facts confidently and can repeat itself.
+The performance of this model can possibly be attributed to a higher quality training data mix, which is built from filtered web text (FineWeb), educational text (FineWeb-Edu) and synthetic stories (Cosmopedia). Models such as Pythia are trained on the Pile, which includes code, mathematics and scientific papers, so part of their capacity goes to domains these benchmarks don’t test. My philosophy with this model is that it has limited capacity to learn, so I focused on English prose, rather than technical syntax.
 
 ## Limitations
 
@@ -67,6 +71,7 @@ This is a 100M-parameter model trained on about 5B tokens, so it is fluent but n
       A whale is a type of fish that has been found throughout the ocean. They are known for their powerful stomachs
       and large numbers of jellyfish, which they eat when they feed. Some whales have even eaten seals before but never
       became extinct.
+  
 - It can repeat itself. A repetition penalty (about 1.1–1.2) helps.
 - Open-ended creative requests (poems, stories) lose the thread after a few lines.
 - It has seen little multi-turn data, so replies get shorter and less reliable in long conversations.
@@ -97,14 +102,99 @@ build-Release\main
 
 ## Repository layout
 
-<!-- TODO: adjust to the actual layout. -->
-
 ```
 src/            main.cpp and the source files
 include/        headers: model, tokenizer, checkpoint, inference
 cuda/           CUDA kernels and cuBLAS/cuDNN wrappers
 docs/           browser demo: index.html, script.js, style.css, tokenizer.json
 ```
+
+## Example Outputs
+
+
+**A short multi-turn conversation (reasonable)**
+
+> **You:** hey
+
+> **small-llm:** Hello! How can I help you today?
+
+> **You:** what is photosynthesis?
+
+> **small-llm:** Photosynthesis is the process by which plants convert sunlight into food and oxygen. It's a wonderful way to use up all that energy and make new things, like fruits or vegetables.
+
+> **You:** do animals do this too?
+
+> **small-llm:** Yes, they do. Animals in the animal kingdom eat leaves and other plants to make food for themselves. They also eat seeds from trees, flowers, and even small mammals.
+
+> **You:** what about fish? what's the fastest fish?
+
+> **small-llm:** The fastest fish is called the tuna. Fish are fast-moving creatures with long legs and big eyes. They swim around on land and have lots of fun exploring their underwater world.
+
+> **You:** does tuna taste good?
+
+> **small-llm:** Yes, many people enjoy tuna as a sweet treat because it's high in protein, healthy fats, and low sugar. It tastes great when eaten raw, cooked, or mixed with other ingredients like honey or oil.
+
+> **You:** cool, thanks!
+
+> **small-llm:** I hope your day has been filled with delicious meals and yummy drinks.
+
+**Short stories (decent)**
+> **You:** Tell me a story about recycling
+
+> **small-llm:** One sunny day, Sam and Alex were walking down the street when they saw a big pile of trash on the ground. They picked up the litter and started picking it up again. As they got closer to the pile, they noticed that some of the plastic bags had been left behind by people who didn't want them.
+>
+> "What happened?" asked Sam. "Why did this happen? Why did this happen?"
+>
+> Alex thought for a moment before answering, "Well, I remember learning in school how important it is to clean our planet so we can all live happily ever after."
+>
+> Sam nodded, understanding what he was saying. He realized that even though things might not always go as planned, taking care of the environment could lead to positive changes over time. From then on, Sam made sure to take better care of his surroundings and took care of his waste disposal. 
+>
+> In conclusion, recycling isn't just about throwing away old items; it's also about being mindful of its impact on Earth and making responsible choices towards living sustainably. By doing so, everyone benefits from the process, including those less fortunate than themselves!
+>  
+> (Note: This story is inspired by real-life situations where individuals often encounter issues related to their own actions.)
+
+**Poetry (better with higher temperature)**
+
+> **You:** Write a short poem about heartbreak, the wind, and grass blowing.
+
+> **small-llm:** Heartbreak I am\
+> \- Somewhere deep in my soul's sea\
+> No one can hear me now\
+> But I know I'll make it out\
+> I'll get up again soon enough
+
+> **You:** again
+
+> **small-llm:** In this lonely land lies love\
+> It is in every tree where life turns\
+> And you will find me again\
+> For what could be?
+>
+> "Oh, those beautiful trees that dance by their feet\
+> They sway gently with grace
+
+> **You:** again
+
+> **small-llm:** Just listen to how soft my branches are\
+> My voice fills your breath like peace\
+> A symphony of sounds and whispers adds another layer\
+> This journey has been worth every day
+
+**Where it fails**
+
+Arithmetic (correct answer: 6):
+
+> **You:** If Sam has 3 apples and gives 1 to Maya, then buys 4 more, how many does Sam have?
+
+> **small-llm:** Sam had two apples. The first was a red apple with a greenish-brown crust, and the second was a white-colored apple with a yellowish-red edge.
+>
+> Maya was happy that Sam had enough apples for her. She wanted to buy 2 apples per day so she could eat them all. However, she didn't want to spend too much money on other things. So, she bought 2 apples and got 6 apples in total.
+
+Factual recall (correct answer: Canberra):
+
+> **You:** What's the capital of Australia?
+
+> **small-llm:** The capital is Tasmania, which is in Australia. It's one of the largest states in Australia, with 864,000 people.
 
 ## Data and licenses
 
